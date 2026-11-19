@@ -2296,12 +2296,12 @@ fn launch_with(
 /// accounts are renewed and saved for the next launch.
 pub fn session_for_game(game_home: &Path) -> Result<GameSession, NoOwner> {
     let mut accounts = Accounts::load();
-    let pass = launch_for_play(
+    let pass = launch_for_game(
         &Endpoints::live(),
         client_id().as_deref(),
         store(),
         &mut accounts,
-    );
+    )?;
     let env = split_sessions(
         game_home,
         &mut accounts,

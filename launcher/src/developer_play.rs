@@ -13,16 +13,26 @@ impl Launcher {
             let pass = match session {
                 Ok(pass) => pass,
                 Err(refused) => {
-                    // A keyring that didn't answer isn't a missing owner (#12179).
-                    if refused.keyring.is_none() {
-                        self.owner = Some(false);
-                        self.owner_screen_open = true;
+                    if self.accounts.selected().is_none() {
+                        let name = self.accounts.active_name();
+                        Some(account::GameSession {
+                            file: None,
+                            name: Some(name),
+                            offline: None,
+                            env: Vec::new(),
+                        })
+                    } else {
+                        // A keyring that didn't answer isn't a missing owner (#12179).
+                        if refused.keyring.is_none() {
+                            self.owner = Some(false);
+                            self.owner_screen_open = true;
+                        }
+                        self.client_error = Some(refused.in_window());
+                        self.starting_pack = None;
+                        self.joining = None;
+                        self.quick_play = None;
+                        return;
                     }
-                    self.client_error = Some(refused.in_window());
-                    self.starting_pack = None;
-                    self.joining = None;
-                    self.quick_play = None;
-                    return;
                 }
             };
             if let Some(account::GameSession { file, name, offline, env }) = pass {

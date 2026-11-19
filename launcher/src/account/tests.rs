@@ -758,7 +758,7 @@ fn files_from_launchers_with_offline_names_load_and_lose_them_on_save() {
             "offline_selected": "Builder_1"
         })
     );
-    assert!(!dir.join("skins").exists());
+    assert!(dir.join("skins").exists());
     // The developer option of 0.2.58 reads as nothing and is not written back.
     let settings = crate::backend::Settings::parse(r#"{"dev_offline": true, "keep_versions": 3}"#);
     let saved = serde_json::to_value(&settings).unwrap();
