@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use syn::visit::Visit;
 use syn::{ImplItem, Item};
 
+mod reach;
+
 /// One target function, copied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Patched {
@@ -1070,6 +1072,11 @@ pub fn generate(
     }
     if !refusals.is_empty() {
         return Err(refusals);
+    }
+    // A lower crate's mirror keeps only the imports its copies name: only the game crate's
+    // modules are all widened, so only there can a module be mirrored for its imports.
+    if let Some(tree) = trees.get_mut("horizon_client") {
+        reach::extend(&mut source, "horizon_client", tree);
     }
     let mut libs = Vec::new();
     for (source_crate, tree) in &trees {
