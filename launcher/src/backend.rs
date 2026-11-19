@@ -2025,25 +2025,7 @@ fn download_for_owner(
         Ok(p) => Ok(p),
         Err(_) if accounts.accounts.is_empty() => {
             let name = accounts.active_name();
-            let fake_account = account::Account {
-                uuid: "00000000000000000000000000000000".into(),
-                name,
-                skin: None,
-                cape: None,
-            };
-            let fake_secrets = account::Secrets {
-                minecraft_token: "0".into(),
-                xuid: "0".into(),
-                owns: true,
-                issued: std::time::SystemTime::now(),
-                expires_in: 86400,
-            };
-            Ok(account::Launch {
-                session: None,
-                offline: None,
-                owner: Some((fake_account, fake_secrets)),
-                unsaved: None,
-            })
+            Ok(account::Launch::dummy_owner(name))
         }
         Err(e) => Err(e),
     };

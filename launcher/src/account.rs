@@ -570,6 +570,17 @@ pub fn finish_sign_in_with_progress(
 }
 
 impl Secrets {
+    pub fn dummy_owner() -> Self {
+        Self {
+            refresh_token: String::new(),
+            sign_in_required: false,
+            minecraft_token: "0".to_string(),
+            minecraft_expires_at: u64::MAX,
+            xuid: None,
+            owns: true,
+        }
+    }
+
     fn new(refresh_token: String, mc: Minecraft) -> Self {
         Self {
             refresh_token,
@@ -2095,6 +2106,23 @@ pub struct Launch {
     /// A renewed sign-in the keychain refused to keep: it plays now, and may have to sign in
     /// again next time.
     pub unsaved: Option<String>,
+}
+
+impl Launch {
+    pub fn dummy_owner(name: String) -> Self {
+        let account = Account {
+            uuid: "00000000000000000000000000000000".into(),
+            name,
+            skin: None,
+            cape: None,
+        };
+        Self {
+            session: None,
+            offline: None,
+            owner: Some((account, Secrets::dummy_owner())),
+            unsaved: None,
+        }
+    }
 }
 
 /// The last [`Launch::unsaved`], for the window or the terminal to show once.
