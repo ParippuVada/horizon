@@ -23,7 +23,6 @@ fn player() -> Player {
         uuid: "069a79f444e94726a5befca90e38aaf5".into(),
         token: "mc-token".into(),
         xuid: "2535400000000000".into(),
-        legacy: false,
     }
 }
 
