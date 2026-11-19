@@ -2202,11 +2202,11 @@ fn launch_with(
         };
         let before = serde_json::to_string(&secrets).ok();
         let checked = match &operation {
-            Ok(_) => check_with(ep, client_id, &account, secrets, false, &|_| {}, ask_owner),
+            Ok(_) => check_with_mode(ep, client_id, &account, secrets, false, &|_| {}, ask_owner),
             Err(e) => Check::NoAnswer(e.clone(), secrets),
         };
         let (said, secrets) = match checked {
-            Check::Session(renewed, secrets) => {
+            Check::Owns(renewed, secrets) => {
                 accounts.update(renewed.clone());
                 if plays {
                     pass.session = Some((renewed.clone(), secrets.clone()));
