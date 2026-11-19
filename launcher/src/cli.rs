@@ -140,12 +140,8 @@ enum AccountCmd {
         /// Its name or UUID
         who: String,
     },
-    /// Play as this account (Microsoft name/UUID or offline player name)
+    /// Play as this account
     Select { who: String },
-    /// Set or show the active offline player name
-    Offline { name: Option<String> },
-    /// Remove an offline player name
-    ForgetOffline { name: String },
 }
 
 #[derive(Subcommand)]
@@ -1992,7 +1988,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 let has_any = !accounts.accounts.is_empty() || !accounts.offline.is_empty();
                 if !has_any {
                     println!(
-                        "No accounts configured. Default active name: {}\nAdd an offline name: horizon-launcher account offline <name>\nOr sign in: horizon-launcher account sign-in",
+                        "No accounts configured. Default active name: {}\nSelect a player name: horizon-launcher account select <name>\nOr sign in: horizon-launcher account sign-in",
                         accounts.active_name()
                     );
                 } else {
@@ -2100,31 +2096,12 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             let found_uuid = accounts.find(&who).map(|a| a.uuid.clone());
             if let Some(uuid) = found_uuid {
                 accounts.play_as(&uuid)?;
-            } else if accounts.offline.iter().any(|n| n.eq_ignore_ascii_case(&who)) {
-                accounts.play_as_offline(&who)?;
             } else {
-                return Err(format!("No account or offline player named '{who}'."));
+                accounts.play_as_offline(&who)?;
             }
             let active = accounts.active_name();
             accounts.save()?;
             println!("The game plays as {active}.");
-        }
-        AccountCmd::Offline { name } => {
-            if let Some(name) = name {
-                accounts.play_as_offline(&name)?;
-                accounts.save()?;
-                println!("The game plays as {name} (offline).");
-            } else {
-                println!("Active player name: {}", accounts.active_name());
-            }
-        }
-        AccountCmd::ForgetOffline { name } => {
-            accounts.offline.retain(|n| n != &name);
-            if accounts.offline_selected.as_deref() == Some(&name) {
-                accounts.offline_selected = None;
-            }
-            accounts.save()?;
-            println!("Removed offline player {name}.");
         }
     }
     Ok(())
