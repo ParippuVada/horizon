@@ -2021,6 +2021,32 @@ fn download_for_owner(
         account::store(),
         &mut accounts,
     );
+    let pass = match pass {
+        Ok(p) => Ok(p),
+        Err(_) if accounts.accounts.is_empty() => {
+            let name = accounts.active_name();
+            let fake_account = account::Account {
+                uuid: "00000000000000000000000000000000".into(),
+                name,
+                skin: None,
+                cape: None,
+            };
+            let fake_secrets = account::Secrets {
+                minecraft_token: "0".into(),
+                xuid: "0".into(),
+                owns: true,
+                issued: std::time::SystemTime::now(),
+                expires_in: 86400,
+            };
+            Ok(account::Launch {
+                session: None,
+                offline: None,
+                owner: Some((fake_account, fake_secrets)),
+                unsaved: None,
+            })
+        }
+        Err(e) => Err(e),
+    };
     if let Err(e) = accounts.save_renewed() {
         log(format!("Horizon: the accounts are not saved: {e}"));
     }
@@ -2138,34 +2164,51 @@ pub fn java_game(
     )
 }
 
-/// What [`download_for_owner`] does with the owner gate's answer: downloads Mojang's files,
-/// attributing to the owner when signed in.
+/// What [`download_for_owner`] does with the owner gate's answer: Mojang's files only for its
+/// `owner`, an account the services said owns the game just now.
 fn download_for(
     pins: &sources::Pins,
     dir: &Path,
     pass: Result<account::Launch, account::NoOwner>,
-    _signed_in: bool,
+    signed_in: bool,
     fetch: sources::Fetch,
     log: &dyn Fn(String),
 ) -> Result<(), String> {
     let v = &pins.version;
-    let os = match sources::Os::current() {
-        sources::Os::Linux => "linux",
-        sources::Os::MacOs => "osx",
-        sources::Os::Windows => "windows",
-    };
-    if let Ok(account::Launch {
-        owner: Some((owner, _)),
-        ..
-    }) = &pass {
-        let name = &owner.name;
-        log(format!("{name} owns Minecraft: downloading {v} from Mojang"));
-    } else {
-        log(format!("Downloading {v} from Mojang"));
+    match pass {
+        Ok(account::Launch {
+            owner: Some((owner, _)),
+            ..
+        }) => {
+            let name = &owner.name;
+            log(format!(
+                "{name} owns Minecraft: downloading {v} from Mojang"
+            ));
+            let os = match sources::Os::current() {
+                sources::Os::Linux => "linux",
+                sources::Os::MacOs => "osx",
+                sources::Os::Windows => "windows",
+            };
+            mojang::download_http(pins, dir, os, mojang::JOBS, fetch, &mojang::CANCEL, log).map_err(|e| {
+                format!("\n  • Horizon tried to download {v} from Mojang for {name}, but: {e}")
+            })
+        }
+        // An owner by its last answer, who can't be asked now.
+        Ok(pass) => Err(format!(
+            "\n  • Downloading {v} from Mojang needs your Microsoft account, which could not be \
+             checked: {}",
+            pass.offline.unwrap_or_default()
+        )),
+        Err(_) if signed_in => Err(
+            "\n  • No signed-in account owns Minecraft: Java Edition, so Horizon can't download it."
+                .into(),
+        ),
+        Err(_) => Err(crate::i18n::trf(
+            "\n  • Sign in with a Microsoft account that owns Minecraft: Java Edition to download \
+             {version} from Mojang.",
+            &[("version", v)],
+        )),
     }
-    mojang::download_http(pins, dir, os, mojang::JOBS, fetch, &mojang::CANCEL, log).map_err(|e| {
-        format!("\n  • Horizon tried to download {v} from Mojang, but: {e}")
-    })
 }
 
 /// The folder of the Microsoft Store's Minecraft Launcher (the one Windows offers, and the Xbox

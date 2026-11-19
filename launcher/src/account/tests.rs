@@ -751,7 +751,12 @@ fn files_from_launchers_with_offline_names_load_and_lose_them_on_save() {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         saved,
-        serde_json::json!({ "accounts": accounts.accounts, "selected": UUID })
+        serde_json::json!({
+            "accounts": accounts.accounts,
+            "selected": UUID,
+            "offline": ["Builder_1"],
+            "offline_selected": "Builder_1"
+        })
     );
     assert!(!dir.join("skins").exists());
     // The developer option of 0.2.58 reads as nothing and is not written back.

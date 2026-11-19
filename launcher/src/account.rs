@@ -31,7 +31,7 @@ const SCOPE: &str = "XboxLive.signin offline_access";
 pub const NOT_CONFIGURED: &str = "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't sign in to an online server.";
 /// What a download says while no account in the launcher owns the game. Play never says it.
 pub const NEEDS_OWNER: &str =
-    "Sign in with a Microsoft account that owns Minecraft: Java Edition to download it";
+    "Sign in with a Microsoft account that owns Minecraft: Java Edition to play";
 const DOES_NOT_OWN: &str = "This account doesn't own Minecraft: Java Edition.";
 const NO_PROFILE: &str =
     "This account has no Minecraft profile yet. Create one at minecraft.net, then sign in again.";
@@ -1943,13 +1943,22 @@ impl Accounts {
         }
     }
 
-    /// Plays as `who`: a Microsoft account (UUID or name), an offline name, or default.
-    pub fn play_as(&mut self, who: &str) -> Result<(), String> {
-        if self.accounts.iter().any(|a| a.uuid == who || a.name.eq_ignore_ascii_case(who)) {
-            let account = self.find(who).unwrap();
-            return self.play_as_player(Player::Microsoft(account.uuid.clone()));
+    /// Plays as `uuid`: a signed-in Microsoft account's UUID.
+    pub fn play_as(&mut self, uuid: &str) -> Result<(), String> {
+        if !self.accounts.iter().any(|a| a.uuid == uuid) {
+            return Err("That account isn't signed in.".into());
         }
-        self.play_as_player(Player::Offline(who.to_string()))
+        self.selected = Some(uuid.to_string());
+        self.offline_selected = None;
+        Ok(())
+    }
+
+    /// Plays as an offline player name.
+    pub fn play_as_offline(&mut self, name: &str) -> Result<(), String> {
+        let name = self.add_offline(name)?;
+        self.selected = None;
+        self.offline_selected = Some(name);
+        Ok(())
     }
 
     /// Plays as `who`: a Microsoft account, an offline name (kept), or the game's own name.
@@ -2310,19 +2319,11 @@ fn launch_as(
     accounts: &mut Accounts,
     who: &str,
 ) -> Result<Launch, String> {
-    let chosen = (
-        accounts.selected.clone(),
-        accounts.offline_selected.clone(),
-        accounts.offline.clone(),
-    );
+    let chosen = accounts.selected.clone();
     let pass = accounts
         .play_as(who)
-        .and_then(|()| Ok(launch_for_play(ep, client_id, store, accounts)));
-    (
-        accounts.selected,
-        accounts.offline_selected,
-        accounts.offline,
-    ) = chosen;
+        .and_then(|()| launch_for_game(ep, client_id, store, accounts).map_err(|e| e.to_string()));
+    accounts.selected = chosen;
     pass
 }
 

@@ -14,9 +14,13 @@ impl Launcher {
         }
     }
 
-    pub(super) fn play_as(&mut self, uuid: &str) {
+    pub(super) fn play_as(&mut self, who: &str) {
         let mut accounts = Accounts::load();
-        let done = accounts.play_as(uuid).and_then(|()| accounts.save());
+        let done = if accounts.accounts.iter().any(|a| a.uuid == who) {
+            accounts.play_as(who).and_then(|()| accounts.save())
+        } else {
+            accounts.play_as_offline(who).and_then(|()| accounts.save())
+        };
         match done {
             Ok(()) => self.accounts = accounts,
             Err(e) => self.sign_in_state = Some(SignInState::Done(Err(e))),

@@ -2097,14 +2097,20 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             println!("Signed out {}.", a.name);
         }
         AccountCmd::Select { who } => {
-            accounts.play_as(&who)?;
+            if let Some(a) = accounts.find(&who) {
+                accounts.play_as(&a.uuid)?;
+            } else if accounts.offline.iter().any(|n| n.eq_ignore_ascii_case(&who)) {
+                accounts.play_as_offline(&who)?;
+            } else {
+                return Err(format!("No account or offline player named '{who}'."));
+            }
             let active = accounts.active_name();
             accounts.save()?;
             println!("The game plays as {active}.");
         }
         AccountCmd::Offline { name } => {
             if let Some(name) = name {
-                accounts.play_as(&name)?;
+                accounts.play_as_offline(&name)?;
                 accounts.save()?;
                 println!("The game plays as {name} (offline).");
             } else {
