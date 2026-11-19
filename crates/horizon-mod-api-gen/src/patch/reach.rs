@@ -374,7 +374,7 @@ fn paths_in(tokens: TokenStream, out: &mut impl FnMut(Vec<String>)) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Cache, mirror};
+    use super::super::{Cache, crate_mirror};
     use super::*;
     use quote::quote;
     use std::collections::BTreeMap;
@@ -469,8 +469,7 @@ mod tests {
             .or_default();
         riding.copies.push(ride.parse().unwrap());
         riding.own.insert("ride".into());
-        extend(&mut source, "horizon_client", &mut tree);
-        let body = mirror(&mut source, "horizon_client", &tree, false, None).unwrap();
+        let body = crate_mirror(&mut source, "horizon_client", &mut tree, false, None).unwrap();
         let patch = dir.path().join("patch.rs");
         std::fs::write(
             &patch,

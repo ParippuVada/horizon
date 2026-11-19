@@ -1073,20 +1073,15 @@ pub fn generate(
     if !refusals.is_empty() {
         return Err(refusals);
     }
-    // A lower crate's mirror keeps only the imports its copies name: only the game crate's
-    // modules are all widened, so only there can a module be mirrored for its imports.
-    if let Some(tree) = trees.get_mut("horizon_client") {
-        reach::extend(&mut source, "horizon_client", tree);
-    }
     let mut libs = Vec::new();
-    for (source_crate, tree) in &trees {
+    for (source_crate, tree) in &mut trees {
         let bridges = source_crate == "horizon_client" && !bridge_traits.is_empty();
         let used = (source_crate != "horizon_client").then(|| {
             let mut used = extras.idents.clone();
             idents_in(&tree_tokens(tree), &mut used);
             used
         });
-        let body = match mirror(&mut source, source_crate, tree, bridges, used.as_ref()) {
+        let body = match crate_mirror(&mut source, source_crate, tree, bridges, used.as_ref()) {
             Ok(body) => body,
             Err(why) => {
                 return Err(targets
@@ -1433,6 +1428,22 @@ fn original_path(libraries: &BTreeMap<String, String>, path: &str) -> String {
         Some(rest) => format!("::{library}::{rest}"),
         None => format!("::{library}"),
     }
+}
+
+/// The mirror of crate `krate`, whose copies are in `tree`. The game crate's mirror takes in the
+/// modules its copies reach through imports first ([`reach`]). A lower crate's keeps only the
+/// imports its copies name (`used`): only the game crate's modules are all widened.
+fn crate_mirror(
+    source: &mut Source,
+    krate: &str,
+    tree: &mut Tree,
+    bridges: bool,
+    used: Option<&BTreeSet<String>>,
+) -> Result<proc_macro2::TokenStream, String> {
+    if krate == "horizon_client" {
+        reach::extend(source, krate, tree);
+    }
+    mirror(source, krate, tree, bridges, used)
 }
 
 /// The mirror of module `path` and its children in `tree`.
