@@ -169,15 +169,18 @@ impl RegistryLock {
         Ok(parsed)
     }
 
+    /// A pin both locks hold keeps the edges each one recorded: a mod's own feature selection
+    /// adds edges to a package the game or another mod also locks.
     pub fn extend(&mut self, other: &Self) -> Result<(), String> {
         for (identity, record) in &other.packages {
-            if let Some(previous) = self.packages.get(identity) {
+            if let Some(previous) = self.packages.get_mut(identity) {
                 if previous.checksum != record.checksum {
                     return Err(format!(
                         "Cargo.lock: conflicting pins for {} {}",
                         identity.name, identity.version
                     ));
                 }
+                previous.edges.extend(record.edges.iter().cloned());
             } else {
                 self.packages.insert(identity.clone(), record.clone());
             }
@@ -238,8 +241,10 @@ impl RegistryLock {
         game: &Self,
         require_game: bool,
     ) -> Result<(), String> {
-        // The prebuilt game retains its features. A narrower Cargo workspace may
-        // drop game-owned edges, but must never add edges or change identities.
+        // Cargo compiles every package in this workspace from source: the prebuilt game's
+        // copies are reached only through the SDK's externs and are never relinked. So a
+        // game-locked package may drop edges or gain the edges a mod's own lock recorded for
+        // it, but never an edge no lock records, and no identity may change.
         for (id, record) in resolved.packages.iter().chain(resolved.local.iter()) {
             let owners: Vec<_> = self
                 .packages
@@ -253,7 +258,10 @@ impl RegistryLock {
             if !owners.iter().any(|(old, pin)| {
                 *old == id
                     && if let Some(owner) = game.packages.get(id).or_else(|| game.local.get(id)) {
-                        record.edges.is_subset(&owner.edges)
+                        record
+                            .edges
+                            .iter()
+                            .all(|edge| owner.edges.contains(edge) || pin.edges.contains(edge))
                     } else {
                         pin.edges == record.edges
                     }
@@ -489,6 +497,100 @@ mod tests {
             .unwrap();
         let error = allowed.check_resolution(&resolved, &old).unwrap_err();
         for detail in ["game", "itoa", "1.0.15", "0.4.8"] {
+            assert!(error.contains(detail), "{error}");
+        }
+    }
+
+    /// `[[package]]` records for crates.io packages: `(name, version, checksum digit, edges)`.
+    fn registry(packages: &[(&str, &str, char, &str)]) -> RegistryLock {
+        let mut text = String::from(
+            "version=4
+",
+        );
+        for (name, version, checksum, edges) in packages {
+            text.push_str(&format!(
+                "[[package]]
+name='{name}'
+version='{version}'
+source='{CRATES_IO}'
+checksum='{}'
+dependencies=[{edges}]
+",
+                checksum.to_string().repeat(64)
+            ));
+        }
+        RegistryLock::parse(&text).unwrap()
+    }
+
+    #[test]
+    fn a_mod_may_enable_features_of_a_crate_the_game_also_locks() {
+        // The game locks `parent` with one optional dependency; the mod's own lock records
+        // `parent` with another, which its features turn on.
+        let game = registry(&[
+            ("parent", "1.0.0", 'a', "'game-only'"),
+            ("game-only", "1.0.0", 'b', ""),
+            ("elsewhere", "1.0.0", 'c', ""),
+            ("shared", "1.0.0", 'd', ""),
+            ("shared", "2.0.0", 'e', ""),
+        ]);
+        let pins = registry(&[
+            ("parent", "1.0.0", 'a', "'mod-only', 'shared 1.0.0'"),
+            ("mod-only", "1.0.0", 'f', ""),
+            ("shared", "1.0.0", 'd', ""),
+        ]);
+        let mut allowed = game.clone();
+        allowed.extend(&pins).unwrap();
+        // The mod-only workspace resolves the mod's own selection, and both together.
+        allowed.check_partial_resolution(&pins, &game).unwrap();
+        let both = registry(&[
+            (
+                "parent",
+                "1.0.0",
+                'a',
+                "'game-only', 'mod-only', 'shared 1.0.0'",
+            ),
+            ("game-only", "1.0.0", 'b', ""),
+            ("mod-only", "1.0.0", 'f', ""),
+            ("shared", "1.0.0", 'd', ""),
+        ]);
+        allowed.check_partial_resolution(&both, &game).unwrap();
+        // Without the mod's lock recording those edges, the same graph is refused.
+        let error = game.check_partial_resolution(&pins, &game).unwrap_err();
+        assert!(error.contains("parent"), "{error}");
+        for (refused, detail) in [
+            // An edge no lock records, even to a pinned package.
+            (
+                registry(&[
+                    ("parent", "1.0.0", 'a', "'mod-only', 'elsewhere'"),
+                    ("mod-only", "1.0.0", 'f', ""),
+                    ("elsewhere", "1.0.0", 'c', ""),
+                ]),
+                "parent",
+            ),
+            // A recorded edge moving to another locked version.
+            (
+                registry(&[
+                    ("parent", "1.0.0", 'a', "'shared 2.0.0'"),
+                    ("shared", "2.0.0", 'e', ""),
+                ]),
+                "parent",
+            ),
+            // A package no lock pins.
+            (
+                registry(&[
+                    ("parent", "1.0.0", 'a', "'mod-only'"),
+                    ("mod-only", "1.0.0", 'f', "'unpinned'"),
+                    ("unpinned", "1.0.0", '0', ""),
+                ]),
+                "unpinned",
+            ),
+            // The game's package at another version, or with another checksum.
+            (registry(&[("parent", "1.0.1", 'a', "")]), "parent"),
+            (registry(&[("parent", "1.0.0", '9', "")]), "parent"),
+        ] {
+            let error = allowed
+                .check_partial_resolution(&refused, &game)
+                .unwrap_err();
             assert!(error.contains(detail), "{error}");
         }
     }

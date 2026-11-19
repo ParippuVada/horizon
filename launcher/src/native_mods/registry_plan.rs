@@ -419,16 +419,24 @@ mod tests {
             .check_partial_resolution(&RegistryLock::parse(&added).unwrap(), &plan.game)
             .unwrap_err()
             .contains("bumpalo"));
+        // A mod whose own lock records that feature compiles its own bumpalo with it.
+        let added = RegistryLock::parse(&added).unwrap();
+        let mut with_mod = plan.allowed.clone();
+        with_mod.extend(&added).unwrap();
+        with_mod
+            .check_partial_resolution(&added, &plan.game)
+            .unwrap();
         let moved = game.replace(
             "name = \"bumpalo\"\nversion = \"1.0.0\"",
             "name = \"bumpalo\"\nversion = \"1.0.1\"",
         );
         assert_ne!(moved, game);
-        assert!(plan
-            .allowed
-            .check_partial_resolution(&RegistryLock::parse(&moved).unwrap(), &plan.game)
-            .unwrap_err()
-            .contains("bumpalo"));
+        for allowed in [&plan.allowed, &with_mod] {
+            assert!(allowed
+                .check_partial_resolution(&RegistryLock::parse(&moved).unwrap(), &plan.game)
+                .unwrap_err()
+                .contains("bumpalo"));
+        }
     }
 
     #[test]
