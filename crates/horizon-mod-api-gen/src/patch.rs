@@ -1505,21 +1505,36 @@ fn mirror(
         .filter(|(ident, _)| !reserved.contains(&ident.to_string()))
         .filter(|(ident, _)| !only_public || public.contains(&ident.to_string()))
         .map(|(ident, cfg)| quote!(#(#cfg)* pub use #original::#ident;));
-    let uses = uses(&items).into_iter().filter(|item| {
-        // A `use` naming a child mirror or a copy would collide with it.
+    let mut uses = Vec::new();
+    for item in self::uses(&items) {
+        // A binding of a copy's or a support module's name would collide with it, and so would
+        // one of a module a child mirror stands for; the rest of the `use` stays, a function
+        // that shares a child's name included (`use subtitles::{Subtitles, subtitles};`).
+        let Some(pruned) = prune(&item.tree, &mut Vec::new(), &mut |leaf, name| {
+            !tree.own.contains(name)
+                && !(tree.children.contains_key(name) && reach::names_module(source, path, leaf))
+        }) else {
+            continue;
+        };
         let mut names = Vec::new();
-        collect_names(&item.tree, &mut names);
+        collect_names(&pruned, &mut names);
         // In a lower crate only the listed functions' modules are widened, so an import of a
         // private item elsewhere would not resolve: keep only what the copies and helpers name.
-        let wanted = used
-            .is_none_or(|used| names.is_empty() || names.iter().any(|name| used.contains(name)));
-        wanted && !names.iter().any(|name| reserved.contains(name))
-    });
+        if used.is_none_or(|used| names.is_empty() || names.iter().any(|name| used.contains(name)))
+        {
+            uses.push(syn::ItemUse {
+                tree: pruned,
+                ..item.clone()
+            });
+        }
+    }
     let mut children = Vec::new();
     for (name, child) in &tree.children {
         let ident = format_ident!("{name}");
-        let inner = mirror(source, &format!("{path}::{name}"), child, bridges, used)?;
-        children.push(quote!(pub mod #ident { #inner }));
+        let child_path = format!("{path}::{name}");
+        let guard = module_cfg(source, &child_path).map(|cfg| quote!(#[cfg(#cfg)]));
+        let inner = mirror(source, &child_path, child, bridges, used)?;
+        children.push(quote!(#guard pub mod #ident { #inner }));
     }
     // Repeated before the children, which see them by textual scope as the game's did.
     let macros = source.scope_macros(path);
@@ -1713,6 +1728,122 @@ fn bridge_trait(
             impl #generics #trait_name #args for #owner #args { #declared #defined }
         },
     ))
+}
+
+/// `tree` without the bindings `keep` refuses, given each binding's path and name; none when
+/// nothing is left. A glob is kept.
+fn prune(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    keep: &mut dyn FnMut(&[String], &str) -> bool,
+) -> Option<syn::UseTree> {
+    let mut leaf = |ident: &syn::Ident, name: &str| {
+        let mut path = prefix.clone();
+        if ident != "self" {
+            path.push(ident.to_string());
+        }
+        keep(&path, name).then(|| tree.clone())
+    };
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            let inner = prune(&path.tree, prefix, keep);
+            prefix.pop();
+            Some(syn::UseTree::Path(syn::UsePath {
+                tree: Box::new(inner?),
+                ..path.clone()
+            }))
+        }
+        syn::UseTree::Name(name) if name.ident == "self" => {
+            let bound = prefix.last().cloned().unwrap_or_default();
+            leaf(&name.ident, &bound)
+        }
+        syn::UseTree::Name(name) => leaf(&name.ident, &name.ident.to_string()),
+        syn::UseTree::Rename(rename) => leaf(&rename.ident, &rename.rename.to_string()),
+        syn::UseTree::Glob(_) => Some(tree.clone()),
+        syn::UseTree::Group(group) => {
+            let items: syn::punctuated::Punctuated<syn::UseTree, syn::Token![,]> = group
+                .items
+                .iter()
+                .filter_map(|item| prune(item, prefix, keep))
+                .collect();
+            (!items.is_empty()).then(|| {
+                syn::UseTree::Group(syn::UseGroup {
+                    items,
+                    ..group.clone()
+                })
+            })
+        }
+    }
+}
+
+/// The `cfg` condition of module `path`'s declaration, which its mirror carries: a mirror of a
+/// module the build leaves out (`#[cfg(test)] mod ray_tests`) is left out with it. A module the
+/// game's build script declares has it from its file's `// game-module-cfg:` header, where
+/// `always` is none and a `_tests` module without one is `test`; several declarations of a name
+/// (`friends` and `friends_off`) are any of theirs.
+fn module_cfg(source: &mut Source, path: &str) -> Option<proc_macro2::TokenStream> {
+    let (parent, name) = path.rsplit_once("::")?;
+    let cfg_of = |attrs: &[syn::Attribute]| -> Option<proc_macro2::TokenStream> {
+        let conditions: Vec<proc_macro2::TokenStream> = attrs
+            .iter()
+            .filter(|attr| attr.path().is_ident("cfg"))
+            .filter_map(|attr| {
+                attr.meta
+                    .require_list()
+                    .ok()
+                    .map(|list| list.tokens.clone())
+            })
+            .collect();
+        match conditions.as_slice() {
+            [] => None,
+            [one] => Some(one.clone()),
+            all => Some(quote!(all(#(#all),*))),
+        }
+    };
+    let declared: Vec<Option<proc_macro2::TokenStream>> = source
+        .module(parent)
+        .ok()?
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Mod(module) if module.ident == name => Some(cfg_of(&module.attrs)),
+            _ => None,
+        })
+        .collect();
+    let conditions = if declared.is_empty() {
+        let mut conditions = Vec::new();
+        for file in source.files.get(path).cloned().unwrap_or_default() {
+            let text = source.read(&file).ok()?;
+            let root = if file.file_name().is_some_and(|f| f == "mod.rs") {
+                file.parent().and_then(Path::file_name)
+            } else {
+                file.file_stem()
+            };
+            let header = text
+                .lines()
+                .find_map(|line| line.strip_prefix("// game-module-cfg: "));
+            conditions.push(match header {
+                Some("always") => None,
+                Some(condition) => Some(condition.parse().ok()?),
+                None if root.is_some_and(|r| r.to_string_lossy().ends_with("_tests")) => {
+                    Some(quote!(test))
+                }
+                None => None,
+            });
+        }
+        conditions
+    } else {
+        declared
+    };
+    // A declaration without a condition is always there.
+    let conditions: Vec<proc_macro2::TokenStream> =
+        conditions.into_iter().collect::<Option<_>>()?;
+    match conditions.as_slice() {
+        [] => None,
+        [one] => Some(one.clone()),
+        any => Some(quote!(any(#(#any),*))),
+    }
 }
 
 fn collect_names(tree: &syn::UseTree, out: &mut Vec<String>) {

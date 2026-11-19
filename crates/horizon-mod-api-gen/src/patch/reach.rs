@@ -59,15 +59,7 @@ pub(super) fn extend(source: &mut Source, krate: &str, tree: &mut Tree) {
             for mac in reach.source.scope_macros(&module) {
                 mac.to_tokens(&mut tokens);
             }
-            let mut copied = Scan::default();
-            scan(tokens, 0, &mut copied);
-            for (mut path, glob) in copied.paths {
-                // A name the copy's own `use` binds (`use super::minecarts as carts;`).
-                if let Some(bound) = copied.local.get(&path[0]) {
-                    path.splice(0..1, bound.iter().cloned());
-                }
-                paths.push((path, glob));
-            }
+            scan(tokens, 0, &Scope::new(), &mut paths);
             for (path, glob) in paths {
                 reach.resolve(&module, &path, glob, 0);
             }
@@ -81,6 +73,17 @@ pub(super) fn extend(source: &mut Source, krate: &str, tree: &mut Tree) {
             }
         }
     }
+}
+
+/// Whether `path`, written in module `at`, names a module of a loaded crate through modules
+/// alone (`subtitles` in `use subtitles::{Subtitles, subtitles};`, not `subtitles::subtitles`).
+pub(super) fn names_module(source: &mut Source, at: &str, path: &[String]) -> bool {
+    let mut reach = Reach {
+        source,
+        mirrored: BTreeSet::new(),
+        needed: BTreeSet::new(),
+    };
+    reach.module_of(at, path).is_some() || reach.source.is_module(&path.join("::"))
 }
 
 struct Reach<'a> {
@@ -363,32 +366,59 @@ fn leaves(tree: &syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<Leaf>) {
     }
 }
 
-/// What a copy's tokens name: each path of two or more segments (`a::b::C`), macro arguments
-/// included, with whether it is a glob `use`, and the names the copy's own `use`s bind.
-#[derive(Default)]
-struct Scan {
-    paths: Vec<(Vec<String>, bool)>,
-    local: BTreeMap<String, Vec<String>>,
-}
+/// The names a block's or module's own `use`s bind, as paths from the copy's module; `None` for
+/// a name bound to something the scan does not follow, which hides an outer binding.
+type Scope = BTreeMap<String, Option<Vec<String>>>;
 
 /// Reads `tokens`, `depth` inline modules (`mod helper { … }`) below the copy's module, into
-/// `out`. A path is kept as it reads from the copy's module, and left out where it stays inside
-/// the inline modules. An absolute path (`::std::…`) and a macro variable's (`$x::…`) are not
-/// the crate's; `$crate::…` is `crate::…`.
-fn scan(tokens: TokenStream, depth: usize, out: &mut Scan) {
+/// `out`: each path of two or more segments (`a::b::C`), macro arguments included, as it reads
+/// from the copy's module, with whether it is a glob `use`. A name a `use` of the block or of an
+/// enclosing block binds (`use super::minecarts as carts;`) is followed to what it binds; an
+/// inline module sees only its own. A path that stays inside the inline modules is left out, and
+/// so is an item under a `cfg` attribute: it may name a module the build does not have. An
+/// absolute path (`::std::…`) and a macro variable's (`$x::…`) are not the crate's; `$crate::…` is
+/// `crate::…`.
+fn scan(tokens: TokenStream, depth: usize, outer: &Scope, out: &mut Vec<(Vec<String>, bool)>) {
     let trees: Vec<TokenTree> = tokens.into_iter().collect();
-    let punct =
-        |at: usize, c: char| matches!(trees.get(at), Some(TokenTree::Punct(p)) if p.as_char() == c);
-    let colons = |at: usize| {
-        matches!(trees.get(at), Some(TokenTree::Punct(p)) if p.as_char() == ':' && p.spacing() == Spacing::Joint)
-            && punct(at + 1, ':')
-    };
+    // The block's `use`s first: their names hold in all of it, before and after them.
+    let mut scope = outer.clone();
     let mut index = 0;
     while index < trees.len() {
-        let after_colons = index >= 2 && colons(index - 2);
+        if let Some(end) = gated(&trees, index) {
+            index = end;
+        } else if starts_use(&trees, index) {
+            let end = statement_end(&trees, index);
+            if let Some(item) = use_statement(&trees[index..end]) {
+                let mut found = Vec::new();
+                leaves(&item.tree, &mut Vec::new(), &mut found);
+                for leaf in found {
+                    let path = local(&scope, &leaf.path, depth);
+                    if let Some(name) = &leaf.name {
+                        scope.insert(name.clone(), path.clone());
+                    }
+                    if let Some(path) = path {
+                        out.push((path, leaf.name.is_none()));
+                    }
+                }
+            }
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+    let mut index = 0;
+    while index < trees.len() {
+        if let Some(end) = gated(&trees, index) {
+            index = end;
+            continue;
+        }
+        if starts_use(&trees, index) {
+            index = statement_end(&trees, index);
+            continue;
+        }
         match &trees[index] {
             TokenTree::Group(group) => {
-                scan(group.stream(), depth, out);
+                scan(group.stream(), depth, &scope, out);
                 index += 1;
             }
             TokenTree::Ident(ident)
@@ -397,39 +427,16 @@ fn scan(tokens: TokenStream, depth: usize, out: &mut Scan) {
                     && matches!(trees.get(index + 2), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace) =>
             {
                 if let Some(TokenTree::Group(body)) = trees.get(index + 2) {
-                    scan(body.stream(), depth + 1, out);
+                    scan(body.stream(), depth + 1, &Scope::new(), out);
                 }
                 index += 3;
             }
-            TokenTree::Ident(ident) if ident == "use" && !after_colons => {
-                let end = (index..trees.len())
-                    .find(|&at| punct(at, ';'))
-                    .unwrap_or(trees.len() - 1);
-                let statement: TokenStream = trees[index..=end].iter().cloned().collect();
-                if let Ok(item) = syn::parse2::<syn::ItemUse>(statement)
-                    && item.leading_colon.is_none()
-                {
-                    let mut found = Vec::new();
-                    leaves(&item.tree, &mut Vec::new(), &mut found);
-                    for leaf in found {
-                        let Some(path) = from_copy(leaf.path, depth) else {
-                            continue;
-                        };
-                        if depth == 0
-                            && let Some(name) = &leaf.name
-                        {
-                            out.local.insert(name.clone(), path.clone());
-                        }
-                        out.paths.push((path, leaf.name.is_none()));
-                    }
-                }
-                index = end + 1;
-            }
             TokenTree::Ident(ident) => {
-                let after_dollar = index >= 1 && punct(index - 1, '$');
+                let after_colons = index >= 2 && colons(&trees, index - 2);
+                let after_dollar = index >= 1 && punct(&trees, index - 1, '$');
                 let mut path = vec![ident.to_string()];
                 let mut next = index + 1;
-                while colons(next)
+                while colons(&trees, next)
                     && let Some(TokenTree::Ident(segment)) = trees.get(next + 2)
                 {
                     path.push(segment.to_string());
@@ -438,14 +445,89 @@ fn scan(tokens: TokenStream, depth: usize, out: &mut Scan) {
                 if path.len() > 1
                     && !after_colons
                     && (!after_dollar || path[0] == "crate")
-                    && let Some(path) = from_copy(path, depth)
+                    && let Some(path) = local(&scope, &path, depth)
                 {
-                    out.paths.push((path, false));
+                    out.push((path, false));
                 }
                 index = next;
             }
             _ => index += 1,
         }
+    }
+}
+
+fn punct(trees: &[TokenTree], at: usize, c: char) -> bool {
+    matches!(trees.get(at), Some(TokenTree::Punct(p)) if p.as_char() == c)
+}
+
+fn colons(trees: &[TokenTree], at: usize) -> bool {
+    matches!(trees.get(at), Some(TokenTree::Punct(p)) if p.as_char() == ':' && p.spacing() == Spacing::Joint)
+        && punct(trees, at + 1, ':')
+}
+
+fn starts_use(trees: &[TokenTree], at: usize) -> bool {
+    matches!(&trees[at], TokenTree::Ident(ident) if ident == "use")
+        && !(at >= 2 && colons(trees, at - 2))
+}
+
+/// Where the statement starting at `at` ends: past its `;`.
+fn statement_end(trees: &[TokenTree], at: usize) -> usize {
+    (at..trees.len())
+        .find(|&end| punct(trees, end, ';'))
+        .map_or(trees.len(), |end| end + 1)
+}
+
+/// The `use` statement `tokens`, `$crate` read as `crate`.
+fn use_statement(tokens: &[TokenTree]) -> Option<syn::ItemUse> {
+    let statement: TokenStream = tokens
+        .iter()
+        .enumerate()
+        .filter(|(at, tree)| {
+            !(matches!(tree, TokenTree::Punct(p) if p.as_char() == '$')
+                && matches!(tokens.get(at + 1), Some(TokenTree::Ident(i)) if i == "crate"))
+        })
+        .map(|(_, tree)| tree.clone())
+        .collect();
+    syn::parse2::<syn::ItemUse>(statement)
+        .ok()
+        .filter(|item| item.leading_colon.is_none())
+}
+
+/// Where the item, statement, field or arm under a `cfg` attribute at `at` ends (past its `;`,
+/// `,` or first braced group), when there is one: the scan leaves it out.
+fn gated(trees: &[TokenTree], at: usize) -> Option<usize> {
+    let attribute = |at: usize| {
+        punct(trees, at, '#')
+            && matches!(trees.get(at + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket)
+    };
+    let Some(TokenTree::Group(first)) = trees.get(at + 1) else {
+        return None;
+    };
+    let cfg = matches!(first.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i == "cfg");
+    if !attribute(at) || !cfg {
+        return None;
+    }
+    let mut end = at + 2;
+    while attribute(end) {
+        end += 2;
+    }
+    while end < trees.len() {
+        match &trees[end] {
+            TokenTree::Punct(p) if matches!(p.as_char(), ';' | ',') => return Some(end + 1),
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => return Some(end + 1),
+            _ => end += 1,
+        }
+    }
+    Some(end)
+}
+
+/// `path`, written `depth` inline modules below the copy's module with the names `scope` binds,
+/// as it reads from the copy's module; none where it stays inside the inline modules.
+fn local(scope: &Scope, path: &[String], depth: usize) -> Option<Vec<String>> {
+    match scope.get(&path[0]) {
+        Some(Some(bound)) => Some(bound.iter().chain(&path[1..]).cloned().collect()),
+        Some(None) => None,
+        None => from_copy(path.to_vec(), depth),
     }
 }
 
@@ -516,8 +598,21 @@ mod tests {
     /// A support module beside the copy: its paths leave it with `super`.
     const HELPER: &str = "pub mod helper { pub fn lane() -> u32 { super::super::lanes::LANE } }";
 
+    /// A support module of `game`: a glob that makes `subtitles` a mirror, which must keep the
+    /// rest of `game`'s grouped import of it, and an import a disabled `cfg` leaves out, of a
+    /// module the build does not have.
+    const SUPPORT: &str = "pub(crate) mod support {
+        #[cfg(any())]
+        use crate::game::refs::ray_tests::*;
+        use super::subtitles::*;
+        pub fn caption() -> super::Subtitles {
+            let _ = LANE + super::subtitles();
+            super::Subtitles
+        }
+    }";
+
     /// The game crate as the staging pass leaves it, items public and imports as written, into
-    /// `dir`; and the patch crate's mirror of it with `RIDE` and `HELPER` copied.
+    /// `dir`; and the patch crate's mirror of it with `RIDE`, `HELPER` and `SUPPORT` copied.
     fn mirrored(dir: &Path) -> TokenStream {
         let game = dir.join("lib.rs");
         std::fs::write(
@@ -539,6 +634,17 @@ mod tests {
                     pub mod lanes {{ pub(crate) use gameplay::lanes::LANE; }}
                     pub mod quiet {{ pub(crate) use gameplay::lanes::LANE; }}
                     pub mod riding {{ use super::*; {RIDE} {HELPER} }}
+                    use subtitles::{{Subtitles, subtitles}};
+                    pub mod subtitles {{
+                        pub struct Subtitles;
+                        pub fn subtitles() -> u32 {{ 7 }}
+                        pub(crate) use gameplay::lanes::LANE;
+                    }}
+                    pub mod refs {{
+                        pub fn read() {{}}
+                        #[cfg(test)]
+                        pub mod ray_tests {{ use super::*; pub fn entity() {{}} }}
+                    }}
                 }}"
             ),
         )
@@ -556,13 +662,10 @@ mod tests {
             stale: None,
         };
         let mut tree = Tree::default();
-        let riding = tree
-            .children
-            .entry("game".into())
-            .or_default()
-            .children
-            .entry("riding".into())
-            .or_default();
+        let game = tree.children.entry("game".into()).or_default();
+        game.copies.push(SUPPORT.parse().unwrap());
+        game.own.insert("support".into());
+        let riding = game.children.entry("riding".into()).or_default();
         riding.copies.push(RIDE.parse().unwrap());
         riding.copies.push(HELPER.parse().unwrap());
         riding.own.extend(["ride".to_owned(), "helper".to_owned()]);
@@ -588,7 +691,7 @@ mod tests {
         let file: syn::File = syn::parse2(mirrored(dir.path())).unwrap();
         let mut found = BTreeSet::new();
         modules(&file.items, "crate", &mut found);
-        // `quiet` is reached only by a `use` its `cfg` leaves out of the build.
+        // `quiet` and `refs::ray_tests` are reached only by `use`s a disabled `cfg` leaves out.
         let expected = [
             "game",
             "game::api_values",
@@ -600,10 +703,100 @@ mod tests {
             "game::rails",
             "game::riding",
             "game::riding::helper",
+            "game::subtitles",
+            "game::support",
             "game::tracks",
         ]
         .map(|m| format!("crate::{m}"));
         assert_eq!(found, BTreeSet::from(expected));
+        // `game`'s grouped import keeps what does not collide with the `subtitles` mirror: the
+        // struct, and the function that shares the module's name.
+        let game = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Mod(module) if module.ident == "game" => module.content.as_ref(),
+                _ => None,
+            })
+            .unwrap();
+        let mut imported = Vec::new();
+        for item in &game.1 {
+            if let Item::Use(item) = item {
+                let mut found = Vec::new();
+                leaves(&item.tree, &mut Vec::new(), &mut found);
+                imported.extend(found.into_iter().map(|leaf| leaf.path.join("::")));
+            }
+        }
+        for name in ["subtitles::Subtitles", "subtitles::subtitles"] {
+            assert!(imported.iter().any(|i| i == name), "{name} in {imported:?}");
+        }
+    }
+
+    /// A mirror of a module the build may leave out keeps its `cfg`: an inline module's, and a
+    /// game module file's (`// game-module-cfg:`).
+    #[test]
+    fn a_mirror_keeps_its_modules_cfg() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("lib.rs");
+        let game = dir.path().join("game.rs");
+        let bench = dir.path().join("bench.rs");
+        std::fs::write(&root, "pub mod game;").unwrap();
+        std::fs::write(
+            &game,
+            "#[cfg(feature = \"extra\")] pub mod gated { pub(crate) use std::rc::Rc; }",
+        )
+        .unwrap();
+        std::fs::write(
+            &bench,
+            "// game-module-cfg: test\npub(crate) use std::sync::Arc;",
+        )
+        .unwrap();
+        let mut source = Source {
+            root: dir.path().to_owned(),
+            loaded: BTreeSet::new(),
+            files: BTreeMap::from([
+                ("horizon_client".to_owned(), vec![root]),
+                ("horizon_client::game".to_owned(), vec![game]),
+                ("horizon_client::game::bench".to_owned(), vec![bench]),
+            ]),
+            parsed: BTreeMap::new(),
+            local_macros: BTreeSet::new(),
+            libraries: BTreeMap::new(),
+            owners: BTreeMap::new(),
+            cache: Cache::default(),
+            hashes: BTreeMap::new(),
+            stale: None,
+        };
+        let mut tree = Tree::default();
+        let game = tree.children.entry("game".into()).or_default();
+        game.children.entry("gated".into()).or_default();
+        game.children.entry("bench".into()).or_default();
+        let body = crate_mirror(&mut source, "horizon_client", &mut tree, false, None).unwrap();
+        let file: syn::File = syn::parse2(body).unwrap();
+        let Some(Item::Mod(game)) = file.items.iter().find(|i| matches!(i, Item::Mod(_))) else {
+            panic!("no game mirror");
+        };
+        let guards: BTreeMap<String, String> = game
+            .content
+            .as_ref()
+            .unwrap()
+            .1
+            .iter()
+            .filter_map(|item| match item {
+                Item::Mod(module) => Some((
+                    module.ident.to_string(),
+                    module
+                        .attrs
+                        .iter()
+                        .map(|a| a.to_token_stream().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(guards["gated"], "# [cfg (feature = \"extra\")]");
+        assert_eq!(guards["bench"], "# [cfg (test)]");
     }
 
     /// The mirror compiles against a prebuilt game whose imports are private.
@@ -659,22 +852,39 @@ mod tests {
             fn f() {
                 use super::minecarts as carts;
                 use super::rails::*;
-                let a = super::minecarts::CartKind::Rideable;
+                let a = carts::CartKind::Rideable;
+                {
+                    use super::depots as carts;
+                    carts::DEPTH;
+                }
                 matches!(k, self::m::K::A);
                 ::std::mem::drop(a);
                 x.y::<u8>();
                 $crate::game::f();
                 $v::g();
                 Vec::<u8>::new();
+                #[cfg(any())]
+                {
+                    super::hidden::X;
+                }
+                #[cfg(any())]
+                use super::gone::*;
+            }
+            #[cfg(test)]
+            mod tests {
+                use super::super::tested::*;
             }
             mod helper {
-                fn h() { super::super::lanes::LANE; super::sibling::X; self::inner::Y; }
+                use super::super::lanes as l;
+                fn h() { l::LANE; super::sibling::X; self::inner::Y; }
+            }
+            macro_rules! m {
+                () => { use $crate::game::bound::Thing; };
             }
         };
-        let mut found = Scan::default();
-        scan(tokens, 0, &mut found);
+        let mut found = Vec::new();
+        scan(tokens, 0, &Scope::new(), &mut found);
         let paths: Vec<(String, bool)> = found
-            .paths
             .iter()
             .map(|(path, glob)| (path.join("::"), *glob))
             .collect();
@@ -685,18 +895,15 @@ mod tests {
                 expect("super::minecarts", false),
                 expect("super::rails", true),
                 expect("super::minecarts::CartKind::Rideable", false),
+                expect("super::depots", false),
+                expect("super::depots::DEPTH", false),
                 expect("self::m::K::A", false),
                 expect("crate::game::f", false),
+                expect("super::lanes", false),
                 expect("super::lanes::LANE", false),
                 expect("self::sibling::X", false),
+                expect("crate::game::bound::Thing", false),
             ]
-        );
-        assert_eq!(
-            found.local,
-            BTreeMap::from([(
-                "carts".to_owned(),
-                vec!["super".to_owned(), "minecarts".to_owned()]
-            )])
         );
     }
 }
