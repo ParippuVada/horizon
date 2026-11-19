@@ -2355,14 +2355,7 @@ fn launch_as(
     pass
 }
 
-/// Who `who` names: a signed-in account's UUID, or an offline name.
-fn who_player(accounts: &Accounts, who: &str) -> Player {
-    if accounts.accounts.iter().any(|a| a.uuid == who) {
-        Player::Microsoft(who.to_owned())
-    } else {
-        Player::Offline(who.to_owned())
-    }
-}
+
 
 /// The game's ask for a launch: the session file for a Microsoft account, or `--name` for an
 /// offline one, with its skin in the environment.

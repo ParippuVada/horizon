@@ -2097,8 +2097,9 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             println!("Signed out {}.", a.name);
         }
         AccountCmd::Select { who } => {
-            if let Some(a) = accounts.find(&who) {
-                accounts.play_as(&a.uuid)?;
+            let found_uuid = accounts.find(&who).map(|a| a.uuid.clone());
+            if let Some(uuid) = found_uuid {
+                accounts.play_as(&uuid)?;
             } else if accounts.offline.iter().any(|n| n.eq_ignore_ascii_case(&who)) {
                 accounts.play_as_offline(&who)?;
             } else {
