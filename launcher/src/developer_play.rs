@@ -25,10 +25,16 @@ impl Launcher {
                     return;
                 }
             };
-            if let Some(account::GameSession { file, offline, env }) = pass {
+            if let Some(account::GameSession { file, name, offline, env }) = pass {
                 self.owner = Some(true);
                 if let Some(file) = file {
                     cmd.arg("--session-file").arg(file);
+                } else if let Some(name) = name {
+                    cmd.arg("--name").arg(name);
+                } else {
+                    let accounts = Accounts::load();
+                    let name = accounts.active_name();
+                    cmd.arg("--name").arg(name);
                 }
                 cmd.envs(env);
                 // Still play, offline, and say why.

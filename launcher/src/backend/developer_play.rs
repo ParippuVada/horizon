@@ -34,6 +34,12 @@ pub fn client_as(tag: &str, who: Option<&str>) -> Result<Command, String> {
     if let Some(session) = session {
         if let Some(file) = session.file {
             cmd.arg("--session-file").arg(file);
+        } else if let Some(name) = session.name {
+            cmd.arg("--name").arg(name);
+        } else {
+            let accounts = account::Accounts::load();
+            let name = accounts.active_name();
+            cmd.arg("--name").arg(name);
         }
         cmd.envs(session.env);
         if let Some(e) = session.offline {

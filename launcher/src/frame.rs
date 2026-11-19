@@ -1011,9 +1011,8 @@ impl Launcher {
         let (name, how) = self.who_plays();
         let face = self.accounts.selected().map(|a| a.uuid.clone());
         let open = self.account_menu;
-        // Signed out, the chip is only the face: the Sign in with Microsoft button beside it
-        // says it once, and the page tabs keep their room.
-        let signed_in = face.is_some() && !tight;
+        // The chip shows the active player (Microsoft or offline) unless tight.
+        let signed_in = !name.is_empty() && !tight;
         let chip =
             div()
                 .id("account")
@@ -1198,7 +1197,12 @@ impl Launcher {
         }
         let t = self.theme;
         let soft = self.look.accent_soft;
-        let now = self.accounts.selected().map(|a| a.uuid.clone());
+        let now_ms = self.accounts.selected().map(|a| a.uuid.clone());
+        let now_offline = self
+            .accounts
+            .offline_selected
+            .clone()
+            .unwrap_or_else(|| self.accounts.active_name());
         let mut menu = ui::popover(250.)
             .id("account-menu")
             .occlude()
@@ -1208,7 +1212,11 @@ impl Launcher {
                 cx.notify();
             }));
         for (i, (who, name, how)) in self.players().into_iter().enumerate() {
-            let chosen = Some(&who) == now.as_ref();
+            let chosen = if let Some(ms_uuid) = &now_ms {
+                &who == ms_uuid
+            } else {
+                who == now_offline
+            };
             let id = SharedString::from(format!("account-pick-{i}"));
             menu = menu.child(keyboard(
                 track_hover(

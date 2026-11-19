@@ -530,22 +530,19 @@ pub(crate) fn sign_in_change(
 }
 
 /// `owner`: whether an account here owns the game, by the keychain (`Launcher::owner`).
-pub(crate) fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> PlayPress {
-    match (prepared, owner) {
+pub(crate) fn play_press(prepared: bool, _owner: Option<bool>, busy: bool) -> PlayPress {
+    match prepared {
         _ if busy => PlayPress::Nothing,
-        (true, _) => PlayPress::Play,
-        (false, Some(true)) => PlayPress::PrepareThenPlay,
-        (false, _) => PlayPress::Nothing,
+        true => PlayPress::Play,
+        false => PlayPress::PrepareThenPlay,
     }
 }
 
 /// What Play's button says for `press`, so its label is what a click does: "Prepare & play"
-/// when it prepares first, "Sign in to play" when no account here owns the game (it does
-/// nothing then), "Play" otherwise (dimmed while the keychain is still being read).
-pub(crate) fn play_label(press: PlayPress, owner: Option<bool>) -> &'static str {
-    match (press, owner) {
-        (PlayPress::PrepareThenPlay, _) => "Prepare & play",
-        (PlayPress::Nothing, Some(false)) => "Sign in to play",
+/// when it prepares first, "Play" otherwise.
+pub(crate) fn play_label(press: PlayPress, _owner: Option<bool>) -> &'static str {
+    match press {
+        PlayPress::PrepareThenPlay => "Prepare & play",
         _ => "Play",
     }
 }

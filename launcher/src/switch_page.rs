@@ -7,7 +7,10 @@ impl Launcher {
     pub(super) fn who_plays(&self) -> (String, &'static str) {
         match self.accounts.selected() {
             Some(a) => (a.name.clone(), tr("Microsoft account")),
-            None => (String::new(), tr("Sign in with Microsoft")),
+            None => {
+                let name = self.accounts.active_name();
+                (name, tr("Offline account"))
+            }
         }
     }
 
@@ -23,11 +26,16 @@ impl Launcher {
 
     /// Everyone the player can play as (each account's UUID and name), with how each signs in.
     pub(super) fn players(&self) -> Vec<(String, String, &'static str)> {
-        self.accounts
+        let mut list: Vec<(String, String, &'static str)> = self
+            .accounts
             .accounts
             .iter()
             .map(|a| (a.uuid.clone(), a.name.clone(), tr("Microsoft")))
-            .collect()
+            .collect();
+        for name in &self.accounts.offline {
+            list.push((name.clone(), name.clone(), tr("Offline")));
+        }
+        list
     }
 
     /// The menu under the account chip, while open.
@@ -36,7 +44,12 @@ impl Launcher {
             return None;
         }
         let t = self.theme;
-        let now = self.accounts.selected().map(|a| a.uuid.clone());
+        let now_ms = self.accounts.selected().map(|a| a.uuid.clone());
+        let now_offline = self
+            .accounts
+            .offline_selected
+            .clone()
+            .unwrap_or_else(|| self.accounts.active_name());
         let mut menu = div()
             .id("account-menu")
             .absolute()
@@ -56,7 +69,11 @@ impl Launcher {
                 cx.notify();
             }));
         for (i, (who, name, how)) in self.players().into_iter().enumerate() {
-            let chosen = Some(&who) == now.as_ref();
+            let chosen = if let Some(ms_uuid) = &now_ms {
+                &who == ms_uuid
+            } else {
+                who == now_offline
+            };
             menu = menu.child(
                 div()
                     .id(SharedString::from(format!("account-pick-{i}")))

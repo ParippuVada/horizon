@@ -6,9 +6,13 @@
 //! reads once (`--session-file`), never on its command line. Tokens never reach logs, errors or
 //! output.
 //!
-//! The owner gate ([`launch`]): the launcher starts the game only while an account in it owns
-//! Minecraft: Java Edition, as other launchers do, and the game plays as the selected account.
-//! The game binary itself, its harnesses and the servers don't go through the launcher's gate.
+//! Offline names are the default and never need an account: who plays is [`Accounts::player`], and
+//! the game gets `--name` and its skin from [`Accounts::name_arg`] and [`Accounts::look_env`]. A
+//! Microsoft account is optional, for online-mode servers, the wardrobe and splitscreen. Its
+//! session is renewed for the launch ([`session_for_game`]) and never checked for ownership there.
+//!
+//! [`launch`] and its [`NoOwner`] remain for one thing only: downloading Mojang's game files, which
+//! is for an account that owns Minecraft: Java Edition. Play doesn't go through it.
 //!
 //! The Azure app (client ID) is Horizon's own and is configuration: `HORIZON_MSA_CLIENT_ID` at
 //! build time, or at run time to override it. Without one, sign-in says it is not configured.
@@ -24,10 +28,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// The keychain service name every secret is stored under.
 pub const SERVICE: &str = "dev.playhorizon.launcher";
 const SCOPE: &str = "XboxLive.signin offline_access";
-pub const NOT_CONFIGURED: &str = "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.";
-/// What every Play says while no account in the launcher owns the game.
+pub const NOT_CONFIGURED: &str = "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't sign in to an online server.";
+/// What a download says while no account in the launcher owns the game. Play never says it.
 pub const NEEDS_OWNER: &str =
-    "Sign in with a Microsoft account that owns Minecraft: Java Edition to play";
+    "Sign in with a Microsoft account that owns Minecraft: Java Edition to download it";
 const DOES_NOT_OWN: &str = "This account doesn't own Minecraft: Java Edition.";
 const NO_PROFILE: &str =
     "This account has no Minecraft profile yet. Create one at minecraft.net, then sign in again.";
@@ -580,9 +584,11 @@ impl Secrets {
 
 /// What asking the Minecraft services again found for one account.
 enum Check {
-    /// It owns the game: its profile as it is now (the name may have changed) and its tokens.
-    Owns(Account, Secrets),
-    /// The services said it doesn't own the game (or has no profile any more).
+    /// Its profile as it is now (the name may have changed) and its tokens, renewed. With
+    /// `ask_owner` this is an account that owns the game (`secrets.owns`); playing only needs a
+    /// token that works, whatever the last ownership answer says.
+    Session(Account, Secrets),
+    /// The services said it doesn't own the game (or has no profile any more); never playing.
     DoesNot(Secrets),
     /// No answer (no network, a sign-in that can't be renewed): the last answer stands.
     NoAnswer(String, Secrets),
@@ -591,9 +597,11 @@ enum Check {
 /// Asks whether `account` owns the game, with a Minecraft token renewed through the refresh token
 /// first when it has less than an hour left. The secrets come back renewed whatever the answer.
 fn check(ep: &Endpoints, client_id: Option<&str>, account: &Account, secrets: Secrets) -> Check {
-    check_with(ep, client_id, account, secrets, false, &|_| {})
+    check_with(ep, client_id, account, secrets, false, &|_| {}, true)
 }
 
+/// [`check`] for a launch: `ask_owner` false only renews the session and reads the profile, so
+/// the account plays with what it has; nothing is refused for owning nothing.
 fn check_with(
     ep: &Endpoints,
     client_id: Option<&str>,
@@ -601,6 +609,7 @@ fn check_with(
     mut secrets: Secrets,
     force: bool,
     progress: &dyn Fn(session::Phase),
+    ask_owner: bool,
 ) -> Check {
     if secrets.sign_in_required {
         return Check::NoAnswer(SIGN_IN_AGAIN.into(), secrets);
@@ -630,6 +639,21 @@ fn check_with(
         }
     }
     let token = &secrets.minecraft_token;
+    if !ask_owner {
+        // Play needs a token and a profile, not ownership: `owns` keeps the last answer, which
+        // is what downloading Mojang's files goes by.
+        return match profile(ep, token) {
+            Ok(p) if p.uuid != account.uuid => Check::NoAnswer(
+                OTHER_PROFILE.into(),
+                Secrets {
+                    sign_in_required: true,
+                    ..secrets
+                },
+            ),
+            Ok(p) => Check::Session(p, secrets),
+            Err(e) => Check::NoAnswer(e, secrets),
+        };
+    }
     progress(session::Phase::Ownership);
     match owns_game(ep, token).and_then(|owns| {
         if !owns {
@@ -650,7 +674,7 @@ fn check_with(
                 ..secrets
             },
         ),
-        Ok(Some(p)) => Check::Owns(
+        Ok(Some(p)) => Check::Session(
             p,
             Secrets {
                 owns: true,
@@ -1738,17 +1762,33 @@ pub fn in_secrets_file() -> bool {
 
 // ----- Accounts ------------------------------------------------------------------------------------
 
-/// accounts.json: the signed-in accounts and the one that plays. Never a token.
+/// accounts.json: the accounts and offline names signed in here, and who plays. Never a token.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Accounts {
     pub accounts: Vec<Account>,
-    /// The UUID of the account the game starts with; none: the first one.
+    /// The UUID of the account the game starts with; none plays an offline name.
     pub selected: Option<String>,
-    /// Offline names an older launcher kept (`offline`), read only so that the next save also
-    /// deletes their skins and capes (`skins/<name>.png`, `skins/<name>.cape.png`). Its
-    /// `offline_selected` and `looks` are dropped on read.
-    #[serde(default, rename = "offline", skip_serializing)]
-    old_offline: Vec<String>,
+    /// Offline names the player keeps, to switch between (`--name`): no account.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub offline: Vec<String>,
+    /// The offline name that plays when no account is selected; none: the name the game made up
+    /// (`horizon-player.txt`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_selected: Option<String>,
+    /// Each offline name's skin and cape (`skins`), by the name in lowercase.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub looks: std::collections::BTreeMap<String, crate::skins::Look>,
+}
+
+/// Who plays, as the quick switch lists them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Player {
+    /// A Microsoft account, by UUID.
+    Microsoft(String),
+    /// An offline name.
+    Offline(String),
+    /// Offline as the name the game made up.
+    GameName,
 }
 
 /// The secrets an account keeps in `store`, if it still has them there.
@@ -1758,6 +1798,12 @@ fn secrets_in(store: &dyn SecretStore, uuid: &str) -> Option<Secrets> {
         .ok()
         .flatten()
         .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// Whether `name` can be an offline name: 3 to 16 letters, digits or `_`, as account names are.
+pub fn valid_offline_name(name: &str) -> bool {
+    (3..=16).contains(&name.chars().count())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 impl Accounts {
@@ -1788,16 +1834,6 @@ impl Accounts {
         {
             let _ = std::fs::remove_file(&tmp);
             return Err(e.to_string());
-        }
-        // An older launcher's offline names: their skins and capes go too, missing files are fine.
-        if let Some(skins) = path.parent().map(|dir| dir.join("skins")) {
-            for name in &self.old_offline {
-                let key = name.to_ascii_lowercase();
-                for file in [format!("{key}.png"), format!("{key}.cape.png")] {
-                    let _ = std::fs::remove_file(skins.join(file));
-                }
-            }
-            let _ = std::fs::remove_dir(&skins);
         }
         Ok(())
     }
@@ -1865,23 +1901,127 @@ impl Accounts {
         Ok(())
     }
     /// Whether an account here owned the game at its last check (the keychain's answer, no
-    /// request): what Play needs.
+    /// request): what downloading Mojang's files needs.
     pub fn has_owner(&self, store: &dyn SecretStore) -> bool {
-        // The selected account first: it owning the game ends the search after one account's
-        // item — every account's item read can ask for the keychain (macOS, #4912).
-        self.selected()
-            .into_iter()
-            .chain(self.accounts.iter().filter(|a| Some(*a) != self.selected()))
-            .any(|a| secrets_in(store, &a.uuid).is_some_and(|s| s.owns))
+        self.selected().is_none()
+            || self.selected()
+                .into_iter()
+                .chain(self.accounts.iter().filter(|a| Some(*a) != self.selected()))
+                .any(|a| secrets_in(store, &a.uuid).is_some_and(|s| s.owns))
     }
 
-    /// Plays as the signed-in account `uuid`.
-    pub fn play_as(&mut self, uuid: &str) -> Result<(), String> {
-        if !self.accounts.iter().any(|a| a.uuid == uuid) {
-            return Err("That account isn't signed in.".into());
+    /// The name of the player currently selected (Microsoft or offline).
+    pub fn active_name(&self) -> String {
+        if let Some(a) = self.selected() {
+            return a.name.clone();
         }
-        self.selected = Some(uuid.to_string());
+        if let Some(name) = &self.offline_selected {
+            return name.clone();
+        }
+        if let Some(first) = self.offline.first() {
+            return first.clone();
+        }
+        "Player".to_string()
+    }
+
+    /// Who plays now.
+    pub fn player(&self) -> Player {
+        match (self.selected(), &self.offline_selected) {
+            (Some(a), _) => Player::Microsoft(a.uuid.clone()),
+            (None, Some(name)) => Player::Offline(name.clone()),
+            (None, None) => Player::GameName,
+        }
+    }
+
+    /// Plays as `who`: a Microsoft account (UUID or name), an offline name, or default.
+    pub fn play_as(&mut self, who: &str) -> Result<(), String> {
+        if self.accounts.iter().any(|a| a.uuid == who || a.name.eq_ignore_ascii_case(who)) {
+            let account = self.find(who).unwrap();
+            return self.play_as_player(Player::Microsoft(account.uuid.clone()));
+        }
+        self.play_as_player(Player::Offline(who.to_string()))
+    }
+
+    /// Plays as `who`: a Microsoft account, an offline name (kept), or the game's own name.
+    pub fn play_as_player(&mut self, who: Player) -> Result<(), String> {
+        match who {
+            Player::Microsoft(uuid) => {
+                if !self.accounts.iter().any(|a| a.uuid == uuid) {
+                    return Err("That account isn't signed in.".into());
+                }
+                self.selected = Some(uuid);
+                self.offline_selected = None;
+            }
+            Player::Offline(name) => {
+                let name = self.add_offline(&name)?;
+                self.selected = None;
+                self.offline_selected = Some(name);
+            }
+            Player::GameName => {
+                self.selected = None;
+                self.offline_selected = None;
+            }
+        }
         Ok(())
+    }
+
+    /// Keeps an offline name (once, in any case); returns it as kept.
+    pub fn add_offline(&mut self, name: &str) -> Result<String, String> {
+        let name = name.trim();
+        if !valid_offline_name(name) {
+            return Err(format!(
+                "{name}: an offline name is 3 to 16 letters, digits or _"
+            ));
+        }
+        if let Some(kept) = self.offline.iter().find(|n| n.eq_ignore_ascii_case(name)) {
+            return Ok(kept.clone());
+        }
+        self.offline.push(name.to_string());
+        Ok(name.to_string())
+    }
+
+    /// Forgets an offline name: its look and its skin and cape files (`skins`) go with it; if
+    /// it was playing, the game's own name plays.
+    pub fn remove_offline(&mut self, name: &str, skins_dir: &Path) -> Result<(), String> {
+        let before = self.offline.len();
+        self.offline.retain(|n| !n.eq_ignore_ascii_case(name));
+        self.looks.remove(&name.to_ascii_lowercase());
+        if self.offline.len() == before {
+            return Err(format!("No offline name {name}."));
+        }
+        crate::skins::forget(skins_dir, name);
+        if self
+            .offline_selected
+            .as_ref()
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        {
+            self.offline_selected = None;
+        }
+        Ok(())
+    }
+
+    /// An offline name's look (the default: no skin of its own).
+    pub fn look(&self, name: &str) -> crate::skins::Look {
+        self.looks
+            .get(&name.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The game's variables for the offline name that plays: its skin and cape.
+    pub fn look_env(&self) -> Vec<(&'static str, String)> {
+        match self.name_arg() {
+            Some(name) => crate::skins::env(&crate::skins::dir(), name, &self.look(name)),
+            None => Vec::new(),
+        }
+    }
+
+    /// The game's `--name` for this run: the offline name, when one plays.
+    pub fn name_arg(&self) -> Option<&str> {
+        match self.selected() {
+            Some(_) => None,
+            None => self.offline_selected.as_deref(),
+        }
     }
 
     /// A renewed profile (its name or skin changed) in place of the old one; who plays stays.
@@ -1891,7 +2031,8 @@ impl Accounts {
         }
     }
 
-    /// Sign out: the secrets leave the keychain, the account the list.
+    /// Sign out: the secrets leave the keychain, the account the list. Offline names stay, and
+    /// one of them plays from now on.
     pub fn remove(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
         let _operation = session::lock(store)?;
         store.delete(uuid)?;
@@ -1964,11 +2105,40 @@ pub fn take_unsaved() -> Option<String> {
 /// the answer in the keychain. An account that gets no answer (no network) keeps its last one, so
 /// being offline never blocks a player who passed before, while "doesn't own" blocks at once.
 /// The caller saves `accounts` (renewed names and skins).
+///
+/// Only downloading Mojang's game files goes through this now: Play asks [`launch_for_play`],
+/// which never refuses.
 pub fn launch(
     ep: &Endpoints,
     client_id: Option<&str>,
     store: &dyn SecretStore,
     accounts: &mut Accounts,
+) -> Result<Launch, NoOwner> {
+    launch_with(ep, client_id, store, accounts, true)
+}
+
+/// The accounts renewed for a launch, with no ownership check at all: Play needs no owner, and an
+/// account that owns nothing still plays with its session (offline-mode servers, the wardrobe,
+/// splitscreen), as an offline name does.
+pub fn launch_for_play(
+    ep: &Endpoints,
+    client_id: Option<&str>,
+    store: &dyn SecretStore,
+    accounts: &mut Accounts,
+) -> Launch {
+    // Never refuses: `ask_owner` false returns every account's answer as a pass. Which account
+    // plays is left alone here: none selected means an offline name plays.
+    launch_with(ep, client_id, store, accounts, false).unwrap_or_default()
+}
+
+/// [`launch`] with `ask_owner`: whether an account that owns the game is required (downloading)
+/// or the session alone is the point (playing).
+fn launch_with(
+    ep: &Endpoints,
+    client_id: Option<&str>,
+    store: &dyn SecretStore,
+    accounts: &mut Accounts,
+    ask_owner: bool,
 ) -> Result<Launch, NoOwner> {
     let selected = accounts.selected.clone();
     let mut order = accounts.accounts.clone();
@@ -2010,24 +2180,30 @@ pub fn launch(
         };
         let before = serde_json::to_string(&secrets).ok();
         let checked = match &operation {
-            Ok(_) => check(ep, client_id, &account, secrets),
+            Ok(_) => check_with(ep, client_id, &account, secrets, false, &|_| {}, ask_owner),
             Err(e) => Check::NoAnswer(e.clone(), secrets),
         };
         let (said, secrets) = match checked {
-            Check::Owns(renewed, secrets) => {
+            Check::Session(renewed, secrets) => {
                 accounts.update(renewed.clone());
                 if plays {
                     pass.session = Some((renewed.clone(), secrets.clone()));
                 }
-                pass.owner = Some((renewed, secrets.clone()));
+                if secrets.owns {
+                    pass.owner = Some((renewed, secrets.clone()));
+                }
                 (None, secrets)
             }
             Check::DoesNot(secrets) => (Some(DOES_NOT_OWN.to_string()), secrets),
             Check::NoAnswer(e, secrets) => (Some(e), secrets),
         };
-        owned = secrets.owns;
+        if ask_owner {
+            owned = secrets.owns;
+        }
         if plays {
-            pass.offline = said;
+            if let Some(why) = &said {
+                pass.offline = Some(why.clone());
+            }
         }
         let after = serde_json::to_string(&secrets).ok();
         if after != before {
@@ -2047,7 +2223,7 @@ pub fn launch(
             }
         }
     }
-    if owned {
+    if owned || !ask_owner {
         Ok(pass)
     } else {
         Err(NoOwner {
@@ -2056,31 +2232,110 @@ pub fn launch(
     }
 }
 
-/// The owner gate before the game starts: [`launch`], where the account that plays (the selected
-/// one, else the first) must own the game itself, by the services' answer or, when they can't be
-/// asked, its last one. Never another account's ownership for a name of its own.
-pub fn launch_for_game(
+/// The owner gate before the game starts: [`launch_for_play`], where nothing is refused. Play
+/// needs no owner; what it does need is a session, and a launch with none plays offline. The
+/// accounts are renewed and saved for the next launch.
+pub fn session_for_game(game_home: &Path) -> Result<GameSession, NoOwner> {
+    let mut accounts = Accounts::load();
+    let pass = launch_for_play(
+        &Endpoints::live(),
+        client_id().as_deref(),
+        store(),
+        &mut accounts,
+    );
+    let env = split_sessions(
+        game_home,
+        &mut accounts,
+        pass.session.as_ref().map(|(a, _)| a.uuid.as_str()),
+    );
+    if let Err(e) = accounts.save_renewed() {
+        eprintln!("Horizon: the accounts are not saved: {e}");
+    }
+    Ok(session_file(game_home, pass, env, &accounts))
+}
+
+/// [`session_for_game`] for one launch as `who` (`play --account`): a signed-in account by UUID,
+/// or an offline name. Who plays changes for this launch only, so several games can play as
+/// several players at once (#4952). What the services renewed (tokens, names, skins) is still
+/// kept; which player `account select` picked is not touched.
+pub fn session_for_game_as(game_home: &Path, who: &str) -> Result<GameSession, String> {
+    let mut accounts = Accounts::load();
+    let pass = launch_as(
+        &Endpoints::live(),
+        client_id().as_deref(),
+        store(),
+        &mut accounts,
+        who,
+    )?;
+    let env = split_sessions(
+        game_home,
+        &mut accounts,
+        pass.session.as_ref().map(|(a, _)| a.uuid.as_str()),
+    );
+    if let Err(e) = accounts.save_renewed() {
+        eprintln!("Horizon: the accounts are not saved: {e}");
+    }
+    Ok(session_file(game_home, pass, env, &accounts))
+}
+
+/// [`session_for_game`] as `who`, on `accounts`, which keeps its choice of player: a UUID (a
+/// signed-in account) or an offline name. The game name plays when a UUID matches nothing and
+/// the name isn't a kept offline one.
+fn launch_as(
     ep: &Endpoints,
     client_id: Option<&str>,
     store: &dyn SecretStore,
     accounts: &mut Accounts,
-) -> Result<Launch, NoOwner> {
-    if accounts.selected().is_none() {
-        accounts.selected = accounts.accounts.first().map(|a| a.uuid.clone());
-    }
-    let pass = launch(ep, client_id, store, accounts)?;
-    let owns = accounts
-        .selected()
-        .and_then(|a| secrets_in(store, &a.uuid))
-        .is_some_and(|s| s.owns);
-    if owns {
-        Ok(pass)
+    who: &str,
+) -> Result<Launch, String> {
+    let chosen = (
+        accounts.selected.clone(),
+        accounts.offline_selected.clone(),
+        accounts.offline.clone(),
+    );
+    let pass = accounts
+        .play_as(who_player(accounts, who))
+        .and_then(|()| Ok(launch_for_play(ep, client_id, store, accounts)));
+    (
+        accounts.selected,
+        accounts.offline_selected,
+        accounts.offline,
+    ) = chosen;
+    pass
+}
+
+/// Who `who` names: a signed-in account's UUID, or an offline name.
+fn who_player(accounts: &Accounts, who: &str) -> Player {
+    if accounts.accounts.iter().any(|a| a.uuid == who) {
+        Player::Microsoft(who.to_owned())
     } else {
-        // Why that account can't play (it doesn't own the game, signed out, an unread keyring).
-        Err(NoOwner {
-            keyring: pass.offline,
-        })
+        Player::Offline(who.to_owned())
     }
+}
+
+/// The game's ask for a launch: the session file for a Microsoft account, or `--name` for an
+/// offline one, with its skin in the environment.
+fn session_file(
+    game_home: &Path,
+    pass: Launch,
+    env: Vec<(&'static str, String)>,
+    accounts: &Accounts,
+) -> GameSession {
+    let mut out = GameSession {
+        env,
+        offline: pass.offline,
+        ..GameSession::default()
+    };
+    if let Some((account, secrets)) = pass.session {
+        match write_launch_session_file(&game_home.join("sessions"), &account, &secrets) {
+            Ok(file) => out.file = Some(file),
+            Err(e) => out.offline = Some(e),
+        }
+    } else if let Some(name) = accounts.name_arg() {
+        out.name = Some(name.to_owned());
+        out.env.extend(accounts.look_env());
+    }
+    out
 }
 
 /// Write the session for the game, readable by this user only, in a fresh file it deletes
@@ -2309,91 +2564,13 @@ impl SignIn {
 pub struct GameSession {
     /// The playing account's session (`--session-file`); none: offline.
     pub file: Option<PathBuf>,
+    /// The offline name that plays (`--name`); none: the game's own name.
+    pub name: Option<String>,
     /// Why the account plays offline this time, if it does.
     pub offline: Option<String>,
-    /// The other accounts' sessions, for splitscreen players (`account_sessions`).
+    /// The other accounts' sessions, for splitscreen players (`account_sessions`), and the
+    /// offline name's skin.
     pub env: Vec<(&'static str, String)>,
-}
-
-/// The owner gate for the game about to start, then the selected account's session in a file
-/// for it, and the other accounts' for its splitscreen players.
-pub fn session_for_game(game_home: &Path) -> Result<GameSession, NoOwner> {
-    let mut accounts = Accounts::load();
-    let pass = launch_for_game(
-        &Endpoints::live(),
-        client_id().as_deref(),
-        store(),
-        &mut accounts,
-    )?;
-    let env = split_sessions(
-        game_home,
-        &mut accounts,
-        pass.session.as_ref().map(|(a, _)| a.uuid.as_str()),
-    );
-    if let Err(e) = accounts.save_renewed() {
-        eprintln!("Horizon: the accounts are not saved: {e}");
-    }
-    Ok(session_file(game_home, pass, env))
-}
-
-/// [`session_for_game`] for one launch as `who` (`play --account`, a signed-in account): who
-/// plays changes for this launch only, so several games can play as several accounts at once
-/// (#4952). What the services renewed (tokens, names, skins) is still kept; which account
-/// `account select` picked is not touched.
-pub fn session_for_game_as(game_home: &Path, who: &str) -> Result<GameSession, String> {
-    let mut accounts = Accounts::load();
-    let pass = launch_as(
-        &Endpoints::live(),
-        client_id().as_deref(),
-        store(),
-        &mut accounts,
-        who,
-    );
-    if let Err(e) = accounts.save_renewed() {
-        eprintln!("Horizon: the accounts are not saved: {e}");
-    }
-    let pass = pass?;
-    let env = split_sessions(
-        game_home,
-        &mut accounts,
-        pass.session.as_ref().map(|(a, _)| a.uuid.as_str()),
-    );
-    if let Err(e) = accounts.save_renewed() {
-        eprintln!("Horizon: the accounts are not saved: {e}");
-    }
-    Ok(session_file(game_home, pass, env))
-}
-
-/// The owner gate as `who`, on `accounts`, which keeps its choice of player.
-fn launch_as(
-    ep: &Endpoints,
-    client_id: Option<&str>,
-    store: &dyn SecretStore,
-    accounts: &mut Accounts,
-    who: &str,
-) -> Result<Launch, String> {
-    let chosen = accounts.selected.clone();
-    let pass = accounts
-        .play_as(who)
-        .and_then(|()| launch_for_game(ep, client_id, store, accounts).map_err(|e| e.to_string()));
-    accounts.selected = chosen;
-    pass
-}
-
-/// The game's session files for a launch that passed the gate.
-fn session_file(game_home: &Path, pass: Launch, env: Vec<(&'static str, String)>) -> GameSession {
-    let mut out = GameSession {
-        env,
-        offline: pass.offline,
-        ..GameSession::default()
-    };
-    if let Some((account, secrets)) = pass.session {
-        match write_launch_session_file(&game_home.join("sessions"), &account, &secrets) {
-            Ok(file) => out.file = Some(file),
-            Err(e) => out.offline = Some(e),
-        }
-    }
-    out
 }
 
 fn split_sessions(
@@ -2537,17 +2714,18 @@ fn account_sessions_until(
     )]
 }
 
-/// Who plays the real Minecraft: Java Edition (a Java instance), past the owner gate itself
-/// ([`launch`]): the selected account when it owns the game, else one that does. With no answer
-/// from the services, an account that owned it plays with its last token. Mojang's game takes the
-/// token on its command line, as Mojang's launcher gives it; that command is never logged.
-pub fn java_player() -> Result<crate::java_launch::Player, String> {
+/// Who plays the real Minecraft: Java Edition (a Java instance): the selected account's session,
+/// renewed with no ownership check ([`launch_for_play`]), else the offline name that plays, given
+/// as offline mode on a server takes it. Mojang's game takes the token on its command line, as
+/// Mojang's launcher gives it; that command is never logged.
+pub fn java_player(game_dir: &Path) -> Result<crate::java_launch::Player, String> {
     let mut accounts = Accounts::load();
     let player = java_player_with(
         &Endpoints::live(),
         client_id().as_deref(),
         store(),
         &mut accounts,
+        game_dir,
     );
     if let Err(e) = accounts.save_renewed() {
         eprintln!("Horizon: the accounts are not saved: {e}");
@@ -2560,24 +2738,29 @@ fn java_player_with(
     client_id: Option<&str>,
     store: &dyn SecretStore,
     accounts: &mut Accounts,
+    game_dir: &Path,
 ) -> Result<crate::java_launch::Player, String> {
-    let pass = launch(ep, client_id, store, accounts).map_err(|e| e.to_string())?;
-    let kept = || {
-        let order = accounts.selected().into_iter().chain(&accounts.accounts);
-        order
-            .into_iter()
-            .find_map(|a| Some((a.clone(), secrets_in(store, &a.uuid).filter(|s| s.owns)?)))
+    let pass = launch_for_play(ep, client_id, store, accounts);
+    if let Some((account, secrets)) = pass.session {
+        return Ok(crate::java_launch::Player {
+            name: account.name,
+            uuid: account.uuid,
+            token: secrets.minecraft_token,
+            xuid: secrets.xuid.unwrap_or_default(),
+            legacy: false,
+        });
+    }
+    // No session: an offline name, as Horizon's own game would play one.
+    let name = match accounts.name_arg() {
+        Some(name) => name.to_owned(),
+        None => crate::offline_name::load_or_create(game_dir),
     };
-    let (account, secrets) = pass
-        .session
-        .or(pass.owner)
-        .or_else(kept)
-        .ok_or_else(|| NoOwner::default().to_string())?;
     Ok(crate::java_launch::Player {
-        name: account.name,
-        uuid: account.uuid,
-        token: secrets.minecraft_token,
-        xuid: secrets.xuid.unwrap_or_default(),
+        uuid: crate::offline_name::uuid(&name),
+        name,
+        token: "0".into(),
+        xuid: String::new(),
+        legacy: true,
     })
 }
 

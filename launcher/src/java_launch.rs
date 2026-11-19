@@ -20,6 +20,8 @@ pub struct Player {
     pub uuid: String,
     pub token: String,
     pub xuid: String,
+    /// An offline name (`--accessToken 0`), which vanilla takes as `--userType legacy`.
+    pub legacy: bool,
 }
 
 impl std::fmt::Debug for Player {
@@ -378,7 +380,10 @@ pub fn command(version: &Value, launch: &Launch) -> Result<Command, String> {
         ("auth_session", format!("token:{}:{}", p.token, p.uuid)),
         ("auth_xuid", p.xuid.clone()),
         ("clientid", String::new()),
-        ("user_type", "msa".into()),
+        (
+            "user_type",
+            if p.legacy { "legacy" } else { "msa" }.into(),
+        ),
         ("user_properties", "{}".into()),
         ("version_name", id.to_string()),
         (

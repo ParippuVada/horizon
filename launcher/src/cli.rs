@@ -140,8 +140,12 @@ enum AccountCmd {
         /// Its name or UUID
         who: String,
     },
-    /// Play as this account
+    /// Play as this account (Microsoft name/UUID or offline player name)
     Select { who: String },
+    /// Set or show the active offline player name
+    Offline { name: Option<String> },
+    /// Remove an offline player name
+    ForgetOffline { name: String },
 }
 
 #[derive(Subcommand)]
@@ -1975,35 +1979,47 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "selected": accounts.selected.as_ref() == Some(&a.uuid),
                         "authentication": account::session::status(account::store(), &a.uuid),
                     })).collect::<Vec<_>>(),
+                    "offline": accounts.offline.iter().map(|name| serde_json::json!({
+                        "name": name,
+                        "selected": accounts.selected.is_none() && accounts.offline_selected.as_deref() == Some(name.as_str()),
+                    })).collect::<Vec<_>>(),
+                    "offline_selected": accounts.offline_selected,
+                    "active_name": accounts.active_name(),
                     "sign_in_configured": account::client_id().is_some(),
                     "owner": accounts.has_owner(account::store()),
                 }));
-            } else if accounts.accounts.is_empty() {
-                println!(
-                    "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
-                     Edition: horizon-launcher account sign-in"
-                );
             } else {
-                for a in &accounts.accounts {
-                    let mark = if accounts.selected.as_ref() == Some(&a.uuid) {
-                        "*"
-                    } else {
-                        " "
-                    };
-                    let status = account::session::status(account::store(), &a.uuid);
-                    // Why it couldn't be checked (a keyring that didn't answer, #12179).
-                    let why = match status.state {
-                        account::session::State::Retry => format!(": {}", status.message),
-                        _ => String::new(),
-                    };
-                    println!("{mark} {}  {}  {}{why}", a.name, a.uuid, status.label());
-                }
-                if !accounts.has_owner(account::store()) {
+                let has_any = !accounts.accounts.is_empty() || !accounts.offline.is_empty();
+                if !has_any {
                     println!(
-                        "{} {}",
-                        account::NoOwner::default(),
-                        tr(backend::SIGN_IN_HINT)
+                        "No accounts configured. Default active name: {}\nAdd an offline name: horizon-launcher account offline <name>\nOr sign in: horizon-launcher account sign-in",
+                        accounts.active_name()
                     );
+                } else {
+                    for a in &accounts.accounts {
+                        let mark = if accounts.selected.as_ref() == Some(&a.uuid) {
+                            "*"
+                        } else {
+                            " "
+                        };
+                        let status = account::session::status(account::store(), &a.uuid);
+                        // Why it couldn't be checked (a keyring that didn't answer, #12179).
+                        let why = match status.state {
+                            account::session::State::Retry => format!(": {}", status.message),
+                            _ => String::new(),
+                        };
+                        println!("{mark} {}  {}  [Microsoft] {}{why}", a.name, a.uuid, status.label());
+                    }
+                    for name in &accounts.offline {
+                        let mark = if accounts.selected.is_none()
+                            && accounts.offline_selected.as_deref() == Some(name.as_str())
+                        {
+                            "*"
+                        } else {
+                            " "
+                        };
+                        println!("{mark} {name}  [Offline]");
+                    }
                 }
             }
         }
@@ -2081,10 +2097,27 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             println!("Signed out {}.", a.name);
         }
         AccountCmd::Select { who } => {
-            let a = find(&accounts, &who)?;
-            accounts.play_as(&a.uuid)?;
+            accounts.play_as(&who)?;
+            let active = accounts.active_name();
             accounts.save()?;
-            println!("The game plays as {}.", a.name);
+            println!("The game plays as {active}.");
+        }
+        AccountCmd::Offline { name } => {
+            if let Some(name) = name {
+                accounts.play_as(&name)?;
+                accounts.save()?;
+                println!("The game plays as {name} (offline).");
+            } else {
+                println!("Active player name: {}", accounts.active_name());
+            }
+        }
+        AccountCmd::ForgetOffline { name } => {
+            accounts.offline.retain(|n| n != &name);
+            if accounts.offline_selected.as_deref() == Some(&name) {
+                accounts.offline_selected = None;
+            }
+            accounts.save()?;
+            println!("Removed offline player {name}.");
         }
     }
     Ok(())
