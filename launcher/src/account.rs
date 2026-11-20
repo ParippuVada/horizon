@@ -47,6 +47,7 @@ pub fn client_id() -> Option<String> {
     std::env::var("HORIZON_MSA_CLIENT_ID")
         .ok()
         .or_else(|| option_env!("HORIZON_MSA_CLIENT_ID").map(str::to_owned))
+        .or_else(|| crate::backend::Settings::load().msa_client_id)
         .map(|id| id.trim().to_owned())
         .filter(|id| !id.is_empty())
 }

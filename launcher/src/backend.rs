@@ -4205,6 +4205,9 @@ impl WhilePlaying {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub selected: Option<String>,
+    /// Custom Microsoft Azure Application (Client) ID for personal accounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msa_client_id: Option<String>,
     /// Game asset architecture. Auto preserves the launcher's process-architecture behavior.
     #[serde(default)]
     pub game_architecture: GameArchitecture,

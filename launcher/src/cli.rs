@@ -1157,6 +1157,12 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
                 s.proxy = Some(value.trim().to_string());
             }
         }
+        "msa-client-id" => {
+            s.msa_client_id = match value.trim() {
+                "default" | "none" | "" => None,
+                id => Some(id.to_string()),
+            };
+        }
         _ => return Err(format!("No setting {key}.")),
     }
     Ok(())

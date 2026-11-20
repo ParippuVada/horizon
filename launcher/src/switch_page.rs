@@ -39,6 +39,10 @@ impl Launcher {
         for name in &self.accounts.offline {
             list.push((name.clone(), name.clone(), tr("Offline")));
         }
+        if list.is_empty() {
+            let active = self.accounts.active_name();
+            list.push((active.clone(), active, tr("Offline")));
+        }
         list
     }
 

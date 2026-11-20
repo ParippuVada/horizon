@@ -18,6 +18,7 @@ pub(super) fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "accent": s.accent.name(),
         "background": horizon_launcher::themes::background(&backend::data_dir(), s.background.as_deref()),
         "cache_limit_gib": s.cache_limit_gib.unwrap_or(horizon_launcher::storage::policy::DEFAULT_LIMIT_GIB),
+        "msa_client_id": s.msa_client_id,
         "no_ai": backend::no_ai(),
     })
 }

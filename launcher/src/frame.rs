@@ -1270,15 +1270,34 @@ impl Launcher {
                 &t,
             ));
         }
-        menu = menu.child(div().mt(px(4.)).child(
-            ui::menu_row("account-manage", "user", tr("Manage accounts"), false, &t).on_click(
-                cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.account_menu = false;
-                    this.go(Page::Settings);
-                    cx.notify();
-                }),
-            ),
-        ));
+        menu = menu.child(
+            div()
+                .mt(px(4.))
+                .child(
+                    ui::menu_row(
+                        "account-add-offline",
+                        "user-add-01",
+                        tr("Add offline account…"),
+                        false,
+                        &t,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.account_menu = false;
+                        this.go(Page::Settings);
+                        this.servers.focus_soon = Some(crate::servers_page::Field::OfflinePlayerName);
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    ui::menu_row("account-manage", "user", tr("Manage accounts"), false, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.account_menu = false;
+                            this.go(Page::Settings);
+                            cx.notify();
+                        }),
+                    ),
+                ),
+        );
         Some(deferred(
             div().absolute().top(px(52.)).right_0().child(menu),
         ))

@@ -85,6 +85,8 @@ pub(super) enum Field {
     JavaArgs,
     WindowWidth,
     WindowHeight,
+    OfflinePlayerName,
+    MsaClientId,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1059,6 +1061,8 @@ impl Launcher {
                             | Field::Token
                             | Field::AddPlayer
                             | Field::DeleteServer
+                            | Field::OfflinePlayerName
+                            | Field::MsaClientId
                     ),
                     |d| d.h(px(36.)).px(px(12.)).rounded(px(radius::CONTROL)),
                 )
@@ -1117,6 +1121,8 @@ impl Launcher {
                                 | Field::Token
                                 | Field::AddPlayer
                                 | Field::DeleteServer
+                                | Field::OfflinePlayerName
+                                | Field::MsaClientId
                         );
                         d.child(crate::glass_ui::focus_ring(if small {
                             radius::CONTROL
@@ -1250,6 +1256,8 @@ impl Launcher {
             | Field::WindowHeight
             | Field::DeleteServer
             | Field::AccentHex => {}
+            Field::OfflinePlayerName => self.add_offline_player(),
+            Field::MsaClientId => self.save_msa_client_id(),
             Field::PreLaunch | Field::Wrapper | Field::LaunchEnv | Field::PostExit => {
                 self.save_launch()
             }
