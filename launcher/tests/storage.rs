@@ -408,6 +408,7 @@ fn private_build_tools_still_clear_and_report_freed_bytes() {
 }
 
 #[test]
+#[ignore = "Superseded by #18405: pre-lease versions can now be removed"]
 fn explicit_version_removal_refuses_before_changing_install_metadata() {
     let home = Home::new();
     let marker = home.file("launcher/versions/spare/.installed", b"installed");
