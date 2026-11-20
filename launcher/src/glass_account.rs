@@ -7,7 +7,7 @@
 use super::*;
 use crate::glass_ui::{self as ui, white, Tone};
 use crate::servers_page::Field;
-use horizon_theme::glass::{ink, radius};
+use horizon_theme::glass::{fill, ink, radius};
 
 impl Launcher {
     pub(super) fn glass_account(&mut self, cx: &mut Context<Self>) -> Div {
@@ -140,7 +140,7 @@ impl Launcher {
                 .rounded(px(radius::ROW))
                 .bg(white(if is_active { 0.08 } else { 0.03 }))
                 .border_1()
-                .border_color(white(if is_active { ui::edge::ACTIVE } else { ui::edge::REST }))
+                .border_color(white(if is_active { ui::edge::STRONG } else { ui::edge::REST }))
                 .child(
                     div()
                         .flex()
@@ -189,8 +189,8 @@ impl Launcher {
                                         .px(px(10.))
                                         .py(px(4.))
                                         .rounded(px(radius::CONTROL))
-                                        .bg(white(ui::fill::BUTTON))
-                                        .hover(|s| s.bg(white(ui::fill::BUTTON_HOVER)))
+                                        .bg(white(fill::BUTTON))
+                                        .hover(|s| s.bg(white(fill::BUTTON_HOVER)))
                                         .cursor_pointer()
                                         .child(
                                             ui::text(12., FontWeight::MEDIUM, ink::FULL)
@@ -241,8 +241,8 @@ impl Launcher {
                 .h(px(36.))
                 .px(px(12.))
                 .rounded(px(radius::CONTROL))
-                .bg(white(ui::fill::BUTTON))
-                .hover(|s| s.bg(white(ui::fill::BUTTON_HOVER)))
+                .bg(white(fill::BUTTON))
+                .hover(|s| s.bg(white(fill::BUTTON_HOVER)))
                 .cursor_pointer()
                 .child(ui::icon("plus-sign", 16., white(ink::FULL)))
                 .child(ui::text(13., FontWeight::MEDIUM, ink::FULL).child(tr("Add & Switch"))),
@@ -344,8 +344,8 @@ impl Launcher {
                     .h(px(36.))
                     .px(px(14.))
                     .rounded(px(radius::CONTROL))
-                    .bg(white(ui::fill::BUTTON))
-                    .hover(|s| s.bg(white(ui::fill::BUTTON_HOVER)))
+                    .bg(white(fill::BUTTON))
+                    .hover(|s| s.bg(white(fill::BUTTON_HOVER)))
                     .cursor_pointer()
                     .child(ui::text(13., FontWeight::MEDIUM, ink::FULL).child(tr("Save"))),
                 &t,
