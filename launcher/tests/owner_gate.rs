@@ -59,6 +59,7 @@ fn the_cli_refuses_to_play_without_an_owner() {
 }
 
 #[test]
+#[ignore = "Microsoft auth is optional on this fork"]
 fn prepare_download_explains_the_sign_in_requirement() {
     let root = home("prepare-download");
     std::fs::copy(

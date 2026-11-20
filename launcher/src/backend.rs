@@ -7077,7 +7077,7 @@ pub fn {f}("
             )
             .unwrap();
             let signed = Command::new("codesign")
-                .args(["--force", "--sign", "-"])
+                .args(["--force", "--deep", "--sign", "-"])
                 .arg(&app)
                 .status()
                 .unwrap();
