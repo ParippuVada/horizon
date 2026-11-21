@@ -821,6 +821,8 @@ mod tests {
     #[test]
     fn the_window_icon_decodes() {
         assert!(decode_icon(horizon_theme::ICON_PNG).is_some());
+        assert!(decode_icon(horizon_theme::MINECRAFT_ICON_PNG).is_some());
+        assert!(decode_icon(horizon_theme::HORIZON_ICON_PNG).is_some());
         assert!(decode_icon(b"not a png").is_none());
     }
 

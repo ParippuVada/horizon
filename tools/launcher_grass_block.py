@@ -66,9 +66,14 @@ def main():
                     k = SHADE[face]
                     px[x, y] = (round(c[0] * k), round(c[1] * k), round(c[2] * k), 255)
     out = img.resize((SIZE, SIZE), Image.Resampling.BOX)
-    path = Path(__file__).resolve().parent.parent / "launcher/assets/logos/grass-block.png"
+    repo = Path(__file__).resolve().parent.parent
+    path = repo / "launcher/assets/logos/grass-block.png"
     out.save(path, optimize=True)
     print(path)
+    theme_icon = repo / "crates/horizon-theme/icons/grass-block-64.png"
+    out64 = img.resize((64, 64), Image.Resampling.BOX)
+    out64.save(theme_icon, optimize=True)
+    print(theme_icon)
 
 
 if __name__ == "__main__":

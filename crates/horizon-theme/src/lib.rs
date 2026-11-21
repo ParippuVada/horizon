@@ -168,9 +168,19 @@ pub mod icons {
     }
 }
 
-/// Horizon's icon at 64 px (PNG), for window title bars and task bars at run time. Rendered from
-/// `docs/media/brand/icon.svg` by `cargo run -p xtask -- icons`.
-pub const ICON_PNG: &[u8] = include_bytes!("../icons/horizon-64.png");
+/// Horizon's brand icon at 64 px (PNG), rendered from `docs/media/brand/icon.svg` by
+/// `cargo run -p xtask -- icons`.
+pub const HORIZON_ICON_PNG: &[u8] = include_bytes!("../icons/horizon-64.png");
+
+/// The default Minecraft icon (the grass block) at 64 px (PNG), for window title bars and task bars
+/// at run time. Clean-room original drawing, not made from Mojang's textures (`tools/launcher_grass_block.py`).
+pub const MINECRAFT_ICON_PNG: &[u8] = include_bytes!("../icons/grass-block-64.png");
+
+/// Vanilla's mark: the clean-room grass block icon, alias for [`MINECRAFT_ICON_PNG`].
+pub const VANILLA_ICON_PNG: &[u8] = MINECRAFT_ICON_PNG;
+
+/// The running game instance window icon: the default Minecraft grass block icon.
+pub const ICON_PNG: &[u8] = MINECRAFT_ICON_PNG;
 
 /// How a type step sizes on the web.
 #[derive(Clone, Copy, Debug, PartialEq)]

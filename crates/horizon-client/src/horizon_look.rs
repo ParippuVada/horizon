@@ -15,7 +15,7 @@ const STYLE_VAR: &str = "HORIZON_MENU_STYLE";
 
 /// Give the engine Horizon's look; call it once, before the first window opens.
 pub(crate) fn give() {
-    horizon_client::window::set_icon_png(theme::ICON_PNG);
+    horizon_client::window::set_icon_png(theme::MINECRAFT_ICON_PNG);
     if std::env::var(STYLE_VAR).is_ok_and(|v| v.eq_ignore_ascii_case("vanilla")) {
         return;
     }

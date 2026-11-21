@@ -1,4 +1,4 @@
-//! Discord Rich Presence: "Playing Horizon" on the player's Discord profile, with what they are
+//! Discord Rich Presence: "Playing Minecraft" on the player's Discord profile, with what they are
 //! doing (docs/native-client.md). A thread of its own talks to the Discord app on this computer
 //! through its local IPC socket (Discord's RPC docs: `discord-ipc-N`, frames of opcode u32 LE +
 //! length u32 LE + JSON). The game says what the player does on each change ([`set`]), which wakes the thread,
@@ -26,9 +26,9 @@ use horizon_platform::hooks::{self, Activity, Dimension, GameMode, Hooks, Play};
 use horizon_platform::pages::{Act, Label, Page, Place, Row};
 use horizon_platform::settings::Store;
 
-/// The "Horizon" application on Discord's developer portal (public: it names the game). Its
-/// Rich Presence assets: `horizon`, the logo.
-pub const DISCORD_APP_ID: &str = "1563857609738690560";
+/// The community "Minecraft" application on Discord's developer portal. Shows "Playing Minecraft"
+/// on the player's Discord profile.
+pub const DISCORD_APP_ID: &str = "762726289341677668";
 /// Whether the application has the game-mode images (`survival`, `creative`, `adventure`,
 /// `spectator`) beside the logo; it doesn't yet.
 const MODE_IMAGES: bool = false;
@@ -358,7 +358,7 @@ fn run() {
 
 /// The activity Discord shows for `status`; `None` clears it.
 fn activity(status: Status, since: Option<u64>) -> Option<Value> {
-    let mut assets = json!({"large_image": "horizon", "large_text": "Horizon"});
+    let mut assets = json!({"large_image": "mclogonew", "large_text": "Minecraft 26.3"});
     let (details, state, party) = match status {
         Status::Off => return None,
         Status::Menus => ("In the menus", None, None),
@@ -650,7 +650,7 @@ mod tests {
         let menus = activity(Status::Menus, None).unwrap();
         assert_eq!(menus["details"], "In the menus");
         assert!(menus.get("state").is_none() && menus.get("timestamps").is_none());
-        assert_eq!(menus["assets"]["large_image"], "horizon");
+        assert_eq!(menus["assets"]["large_image"], "mclogonew");
 
         let single = activity(world(Play::Singleplayer, Dimension::Nether), Some(1000)).unwrap();
         assert_eq!(single["details"], "Singleplayer");
