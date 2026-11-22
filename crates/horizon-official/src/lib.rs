@@ -12,22 +12,20 @@ use horizon_platform::hooks::{self, Hooks};
 use horizon_platform::{mod_links, pages, settings};
 
 /// Every Horizon part in the game, in the order its hooks run.
-const PARTS: [&dyn Hooks; 5] = [
+const PARTS: [&dyn Hooks; 4] = [
     // The anonymous "I'm playing" ping.
     &horizon_heartbeat::HOOKS,
     // Play with Friends: `friend:` addresses join through its tunnel.
     &horizon_friends::game::HOOKS,
     // The official server in the player's server list.
     &horizon_official_servers::HOOKS,
-    // "Playing Horizon" on the player's Discord profile.
-    &horizon_discord::HOOKS,
     // Open and Share for saved performance captures.
     &horizon_perf_share::HOOKS,
 ];
 /// Their settings, in the player's settings files.
-const STORES: [&dyn settings::Store; 1] = [&horizon_discord::SETTING];
+const STORES: [&dyn settings::Store; 0] = [];
 /// Their rows and pages in the options screens.
-const PAGES: [&dyn pages::Page; 1] = [&horizon_discord::SECTION];
+const PAGES: [&dyn pages::Page; 0] = [];
 
 /// The product chooses the built-in Mods screen entries' outside links.
 static MOD_LINKS: [mod_links::Links; 2] = [

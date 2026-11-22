@@ -2098,15 +2098,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "horizon-discord"
-version = "0.1.0"
-dependencies = [
- "horizon-platform",
- "log",
- "serde_json",
-]
-
-[[package]]
 name = "horizon-dualsense"
 version = "0.1.0"
 dependencies = [
@@ -2566,7 +2557,6 @@ name = "horizon-official"
 version = "0.1.0"
 dependencies = [
  "horizon-addresses",
- "horizon-discord",
  "horizon-friends",
  "horizon-game",
  "horizon-heartbeat",

@@ -3428,7 +3428,7 @@ fn launcher_asset_running_from(appimage: bool) -> Option<&'static str> {
 
 /// Development builds and `HORIZON_LAUNCHER_NO_SELF_UPDATE` never replace themselves.
 pub fn self_update_allowed() -> bool {
-    !cfg!(debug_assertions) && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
+    false
 }
 
 /// The version in `horizon-launcher --version`'s output (`horizon-launcher 0.1.5`).
@@ -4394,7 +4394,7 @@ impl Settings {
     }
     /// Whether new Horizon versions are installed automatically.
     pub fn auto_install(&self) -> bool {
-        self.install_new_versions.unwrap_or(true)
+        self.install_new_versions.unwrap_or(false)
     }
     /// Whether old versions are deleted after an install.
     pub fn auto_prune(&self) -> bool {
@@ -6410,10 +6410,10 @@ pub fn {f}("
     #[test]
     fn new_versions_install_automatically_unless_turned_off() {
         // No settings file, an old one that never mentioned it, and 0.1.1's default `false`.
-        assert!(Settings::parse("").auto_install());
-        assert!(Settings::parse("{}").auto_install());
+        assert!(!Settings::parse("").auto_install());
+        assert!(!Settings::parse("{}").auto_install());
         assert!(
-            Settings::parse(r#"{"selected": "v2026.10.13", "auto_install": false}"#).auto_install()
+            !Settings::parse(r#"{"selected": "v2026.10.13", "auto_install": false}"#).auto_install()
         );
         assert!(Settings::parse(r#"{"install_new_versions": true}"#).auto_install());
         assert!(!Settings::parse(r#"{"install_new_versions": false}"#).auto_install());
