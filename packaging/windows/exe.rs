@@ -1,6 +1,6 @@
 //! Windows executables' resources, shared by the build scripts of the game's executables
 //! (`crates/horizon-client/build.rs`, `crates/horizon-official/build.rs`, which include it with
-//! `#[path]`). Embeds Horizon's icon (`packaging/icons/horizon.ico`) as icon resource 1: Explorer
+//! `#[path]`). Embeds the game's icon (`packaging/icons/minecraft.ico`) as icon resource 1: Explorer
 //! and the task bar show it, and the window takes it as its icon. The optional Segment Heap
 //! manifest (`crates/horizon-client/windows-segment-heap.manifest`, the package's
 //! `windows-segment-heap` feature) is embedded in the same resource compilation.
@@ -14,7 +14,7 @@ pub fn resources(bin: &str) {
     let manifest_dir = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let ico = manifest_dir
         .join("../..")
-        .join("packaging/icons/horizon.ico");
+        .join("packaging/icons/minecraft.ico");
     let target_os =
         std::env::var("CARGO_CFG_TARGET_OS").expect("Cargo must provide the build target OS");
     println!("cargo:rerun-if-changed={}", ico.display());

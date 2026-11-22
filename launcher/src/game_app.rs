@@ -15,7 +15,7 @@ pub const APP: &str = "Horizon.app";
 /// The game, then horizon-ctl, which the game looks for beside itself (Copy Connection Details).
 const PROGRAMS: [&str; 2] = ["horizon-client", "horizon-ctl"];
 
-const ICON: &[u8] = include_bytes!("../../packaging/icons/horizon.icns");
+const ICON: &[u8] = include_bytes!("../../packaging/icons/minecraft.icns");
 
 /// Its own identifier, so macOS keeps it apart from the launcher (dev.horizon.launcher); the
 /// games category lets macOS turn Game Mode on when it plays full screen.
